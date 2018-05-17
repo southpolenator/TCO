@@ -1,0 +1,10 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/MM-2018-R1/v15/Server/sqlite3
+/.vs/MM-2018-R1/v15/.suo
+/.vs/TCO/v15
+/MM-2018-R1/bin
+/MM-2018-R1/obj
+*.png
