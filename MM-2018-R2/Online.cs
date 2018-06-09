@@ -1,9 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 
+#if LOCAL
 [Flags]
+#endif
 enum BoardField : byte
 {
     Empty = 0x0,
@@ -20,7 +21,9 @@ enum BoardField : byte
     ObjectMask = Lantern | MirrorBackSlash | MirrorSlash | Obstacle | Crystal,
 }
 
+#if LOCAL
 [Flags]
+#endif
 enum Light : ushort
 {
     Empty = 0x0,
@@ -106,10 +109,11 @@ struct State
     {
         Board = new BoardField[height, width];
         LightMap = new Light[height, width];
-        Obstacles = new List<Obstacle>(100);
-        Mirrors = new List<Mirror>(100);
-        Lanterns = new List<Lantern>(100);
+        Obstacles = new List<Obstacle>();
+        Mirrors = new List<Mirror>();
+        Lanterns = new List<Lantern>();
         Score = 0;
+        Hash = 0;
     }
 
     public BoardField[,] Board;
@@ -118,6 +122,7 @@ struct State
     public List<Mirror> Mirrors;
     public List<Lantern> Lanterns;
     public int Score;
+    public int Hash;
 
     public int Height { get { return Board.GetLength(0); } }
     public int Width { get { return Board.GetLength(1); } }
@@ -148,20 +153,36 @@ struct State
             for (int i = Lanterns.Count; i < other.Lanterns.Count; i++)
                 Lanterns.Add(other.Lanterns[i]);
         Score = other.Score;
+        Hash = other.Hash;
+    }
+
+    public void ShallowCopy(State other)
+    {
+        Score = other.Score;
+        Hash = other.Hash;
+        Array.Copy(other.LightMap, LightMap, other.LightMap.Length);
     }
 
     public bool Same(State other)
     {
-        if (Score != other.Score || Lanterns.Count != other.Lanterns.Count || Obstacles.Count != other.Obstacles.Count || Mirrors.Count != other.Mirrors.Count)
+        if (Hash != other.Hash)
             return false;
-        foreach (Obstacle obstacle in Obstacles)
-            if (other.Board[obstacle.Position.Y, obstacle.Position.X] != Board[obstacle.Position.Y, obstacle.Position.X])
+        if (Mirrors.Count != other.Mirrors.Count)
+            return false;
+        if (Obstacles.Count != other.Obstacles.Count)
+            return false;
+        if (Lanterns.Count != other.Lanterns.Count)
+            return false;
+        if (Score != other.Score)
+            return false;
+        for (int i = 0; i < Obstacles.Count; i++)
+            if (other.Board[Obstacles[i].Position.Y, Obstacles[i].Position.X] != Board[Obstacles[i].Position.Y, Obstacles[i].Position.X])
                 return false;
-        foreach (Mirror mirror in Mirrors)
-            if (other.Board[mirror.Position.Y, mirror.Position.X] != Board[mirror.Position.Y, mirror.Position.X])
+        for (int i = 0; i < Mirrors.Count; i++)
+            if (other.Board[Mirrors[i].Position.Y, Mirrors[i].Position.X] != Board[Mirrors[i].Position.Y, Mirrors[i].Position.X])
                 return false;
-        foreach (Lantern lantern in Lanterns)
-            if (other.Board[lantern.Position.Y, lantern.Position.X] != Board[lantern.Position.Y, lantern.Position.X])
+        for (int i = 0; i < Lanterns.Count; i++)
+            if (other.Board[Lanterns[i].Position.Y, Lanterns[i].Position.X] != Board[Lanterns[i].Position.Y, Lanterns[i].Position.X])
                 return false;
         return true;
     }
@@ -190,6 +211,7 @@ struct State
             Color = fieldColor,
             Position = position,
         });
+        Hash = Hash ^ ((int)fieldColor << 16) ^ position.X ^ (position.Y << 8);
         return true;
     }
 
@@ -202,6 +224,7 @@ struct State
             Position = position,
         });
         Board[position.Y, position.X] |= BoardField.Obstacle;
+        Hash = Hash ^ (position.X << 17) ^ (position.Y << 9);
     }
 
     public bool PutMirror(Position position, BoardField mirrorType, int cost)
@@ -294,6 +317,7 @@ struct State
             Slash = mirrorType == BoardField.MirrorSlash,
         });
         Board[position.Y, position.X] |= mirrorType;
+        Hash = Hash ^ (position.X << 11) ^ (position.Y << 3) ^ ((int)mirrorType << 20);
         return true;
     }
 
@@ -729,8 +753,16 @@ struct State
 
 public class CrystalLighting
 {
+    private Stopwatch sw;
+#if LOCAL
+    private TimeSpan maxTime = Debugger.IsAttached ? TimeSpan.FromSeconds(99999.5) : TimeSpan.FromSeconds(2.5);
+#else
+    private TimeSpan maxTime = TimeSpan.FromSeconds(9.5);
+#endif
+
     public string[] placeItems(string[] targetBoard, int costLantern, int costMirror, int costObstacle, int maxMirrors, int maxObstacles)
     {
+        sw = Stopwatch.StartNew();
         int height = targetBoard.Length;
         int width = targetBoard[0].Length;
         State inputState = new State(width, height);
@@ -761,7 +793,14 @@ public class CrystalLighting
                 inputState.Board[y, x] = field;
             }
 
-        State solution = Solve(inputState, costLantern, costMirror, costObstacle, maxMirrors, maxObstacles);
+        State solution = new State();
+
+        for (maxRayWidth = 1; sw.Elapsed < maxTime; maxRayWidth *= 5)
+        {
+            State s = Solve(inputState, costLantern, costMirror, costObstacle, maxMirrors, maxObstacles);
+            if (s.Score > solution.Score)
+                solution = s;
+        }
         List<string> result = new List<string>();
 
         foreach (var obstacle in solution.Obstacles)
@@ -773,27 +812,34 @@ public class CrystalLighting
         return result.ToArray();
     }
 
+    int maxRayWidth = 1;
+
     private State Solve(State inputState, int costLantern, int costMirror, int costObstacle, int maxMirrors, int maxObstacles)
     {
-        Stopwatch sw = Stopwatch.StartNew();
         State[] stateCache = new State[1000000];
         int stateCacheCount = 0;
-        List<State> solutions = new List<State>();
-        List<State> previousSolutions = new List<State>();
+        State[] solutions = new State[maxRayWidth];
+        int solutionsCount = 0;
+        State[] previousSolutions = new State[maxRayWidth];
+        int previousSolutionsCount = 0;
         State solution = CloneState(stateCache, ref stateCacheCount, inputState);
-        State bestSolution = inputState;
+        State bestSolution = CloneState(stateCache, ref stateCacheCount, inputState);
         sbyte height = (sbyte)inputState.Board.GetLength(0);
         sbyte width = (sbyte)inputState.Board.GetLength(1);
         Position position = new Position();
-        TimeSpan maxTime = Debugger.IsAttached ? TimeSpan.FromSeconds(99999.5) : TimeSpan.FromSeconds(90.5);
         int steps = 0;
 
-        previousSolutions.Add(CloneState(stateCache, ref stateCacheCount, inputState));
-        while (sw.Elapsed < maxTime && previousSolutions.Count > 0)
+        previousSolutions[previousSolutionsCount++] = CloneState(stateCache, ref stateCacheCount, inputState);
+        while (sw.Elapsed < maxTime && previousSolutionsCount > 0)
         {
+#if LOCAL
+            Console.Error.WriteLine("{0}. {1}   {2}s", steps, bestSolution.Score, sw.Elapsed.TotalSeconds);
+#endif
             steps++;
-            foreach (State previousState in previousSolutions)
+            for (int pi = 0; pi < previousSolutionsCount; pi++)
             {
+                State previousState = previousSolutions[pi];
+                solution.Copy(previousState);
                 if (sw.Elapsed > maxTime)
                     break;
                 for (position.Y = 0; position.Y < height; position.Y++)
@@ -806,44 +852,66 @@ public class CrystalLighting
                             if (!previousState.HasColor(position))
                             {
                                 // Try to put Blue lantern
-                                solution.Copy(previousState);
                                 if (solution.PutLantern(position, Light.Blue, costLantern))
-                                    solutions.Add(CloneState(stateCache, ref stateCacheCount, solution));
+                                {
+                                    AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
+                                    solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                                    solution.Board[position.Y, position.X] = BoardField.Empty;
+                                }
+                                solution.ShallowCopy(previousState);
 
                                 // Try to put Yellow lantern
-                                solution.Copy(previousState);
                                 if (solution.PutLantern(position, Light.Yellow, costLantern))
-                                    solutions.Add(CloneState(stateCache, ref stateCacheCount, solution));
+                                {
+                                    AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
+                                    solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                                    solution.Board[position.Y, position.X] = BoardField.Empty;
+                                }
+                                solution.ShallowCopy(previousState);
 
                                 // Try to put Red lantern
-                                solution.Copy(previousState);
                                 if (solution.PutLantern(position, Light.Red, costLantern))
-                                    solutions.Add(CloneState(stateCache, ref stateCacheCount, solution));
+                                {
+                                    AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
+                                    solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                                    solution.Board[position.Y, position.X] = BoardField.Empty;
+                                }
+                                solution.ShallowCopy(previousState);
                             }
                             else
                             {
                                 // Try to put Obstacle
                                 if (previousState.Obstacles.Count < maxObstacles)
                                 {
-                                    solution.Copy(previousState);
                                     solution.PutObstacle(position, costObstacle);
-                                    solutions.Add(CloneState(stateCache, ref stateCacheCount, solution));
+                                    AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
+                                    solution.Obstacles.RemoveAt(solution.Obstacles.Count - 1);
+                                    solution.Board[position.Y, position.X] = BoardField.Empty;
+                                    solution.ShallowCopy(previousState);
                                 }
 
                                 // Try to put slash Mirror /
                                 if (previousState.Mirrors.Count < maxMirrors)
                                 {
-                                    solution.Copy(previousState);
                                     if (solution.PutMirror(position, BoardField.MirrorSlash, costMirror))
-                                        solutions.Add(CloneState(stateCache, ref stateCacheCount, solution));
+                                    {
+                                        AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
+                                        solution.Mirrors.RemoveAt(solution.Mirrors.Count - 1);
+                                        solution.Board[position.Y, position.X] = BoardField.Empty;
+                                    }
+                                    solution.ShallowCopy(previousState);
                                 }
 
                                 // Try to put backslash Mirror \
                                 if (previousState.Mirrors.Count < maxMirrors)
                                 {
-                                    solution.Copy(previousState);
                                     if (solution.PutMirror(position, BoardField.MirrorBackSlash, costMirror))
-                                        solutions.Add(CloneState(stateCache, ref stateCacheCount, solution));
+                                    {
+                                        AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
+                                        solution.Mirrors.RemoveAt(solution.Mirrors.Count - 1);
+                                        solution.Board[position.Y, position.X] = BoardField.Empty;
+                                    }
+                                    solution.ShallowCopy(previousState);
                                 }
                             }
                         }
@@ -851,42 +919,12 @@ public class CrystalLighting
             }
 
             // Return previous solutions to the cache
-            for (int i = 0; i < previousSolutions.Count; i++)
+            for (int i = 0; i < previousSolutionsCount; i++)
                 stateCache[stateCacheCount++] = previousSolutions[i];
-            previousSolutions.Clear();
-
-            // Select only top N states, but unique
-            int maxRayWidth = 2000;
-
-            solutions.Sort((s1, s2) => s2.Score - s1.Score);
-
-            int j = 1;
-            for (int i = 1; j < maxRayWidth && i < solutions.Count; i++)
-            {
-                bool duplicate = false;
-
-                for (int k = j - 1; k >= 0 && solutions[k].Score == solutions[i].Score && !duplicate; k--)
-                    if (solutions[i].Same(solutions[k]))
-                        duplicate = true;
-                if (duplicate)
-                    continue;
-                if (j != i)
-                {
-                    var ttt = solutions[i];
-                    solutions[i] = solutions[j];
-                    solutions[j] = ttt;
-                }
-                j++;
-            }
-
-            // Remove duplicates and ones with low score
-            for (int i = j; i < solutions.Count; i++)
-                stateCache[stateCacheCount++] = solutions[i];
-            if (solutions.Count > j)
-                solutions.RemoveRange(j, solutions.Count - j);
+            previousSolutionsCount = 0;
 
             // Store best solution
-            for (int i = 0; i < solutions.Count; i++)
+            for (int i = 0; i < solutionsCount; i++)
                 if (solutions[i].Score > bestSolution.Score)
                     bestSolution.Copy(solutions[i]);
 
@@ -894,9 +932,78 @@ public class CrystalLighting
             var temp = solutions;
             solutions = previousSolutions;
             previousSolutions = temp;
+            previousSolutionsCount = solutionsCount;
+            solutionsCount = 0;
         }
+#if LOCAL
         Console.Error.WriteLine("{0}: {1} ({2}s)", steps, bestSolution.Score, sw.Elapsed.TotalSeconds);
+#endif
         return bestSolution;
+    }
+
+    private class StateCostComparerClass : IComparer<State>
+    {
+        public int Compare(State x, State y)
+        {
+            return y.Score - x.Score;
+        }
+    }
+
+    static StateCostComparerClass StateCostComparer = new StateCostComparerClass();
+
+    private static void AddSolution(State[] solutions, ref int solutionsCount, State solution, State[] stateCache, ref int stateCacheCount)
+    {
+        if (solutionsCount < solutions.Length)
+        {
+            if (solutionsCount > 0)
+            {
+                int index = Array.BinarySearch(solutions, 0, solutionsCount, solution, StateCostComparer);
+
+                if (index < 0)
+                {
+                    index = ~index;
+                }
+                else
+                {
+                    while (index + 1 < solutionsCount && solutions[index].Score == solutions[index + 1].Score)
+                        index++;
+                    for (int i = index; i >= 0 && solutions[i].Score == solution.Score; i--)
+                        if (solutions[i].Hash == solution.Hash && solutions[i].Same(solution))
+                            return;
+                    index++;
+                }
+                if (index != solutionsCount)
+                    Array.Copy(solutions, index, solutions, index + 1, solutionsCount - index);
+                solutions[index] = CloneState(stateCache, ref stateCacheCount, solution);
+                solutionsCount++;
+            }
+            else
+                solutions[solutionsCount++] = CloneState(stateCache, ref stateCacheCount, solution);
+        }
+        else
+        {
+            if (solutions[solutions.Length - 1].Score >= solution.Score)
+                return;
+
+            int index = Array.BinarySearch(solutions, 0, solutionsCount, solution, StateCostComparer);
+
+            if (index < 0)
+                index = ~index;
+            else
+            {
+                while (index + 1 < solutionsCount && solutions[index].Score == solutions[index + 1].Score)
+                    index++;
+                for (int i = index; i >= 0 && solutions[i].Score == solution.Score; i--)
+                    if (solutions[i].Hash == solution.Hash && solutions[i].Same(solution))
+                        return;
+                if (index < solutionsCount + 1)
+                    index++;
+            }
+            stateCache[stateCacheCount++] = solutions[solutions.Length - 1];
+            if (index != solutions.Length - 1)
+                Array.Copy(solutions, index, solutions, index + 1, solutions.Length - 1 - index);
+            solutions[index] = CloneState(stateCache, ref stateCacheCount, solution);
+        }
     }
 
     private static State CloneState(State[] stateCache, ref int stateCacheCount, State inputState)
