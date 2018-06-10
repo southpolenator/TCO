@@ -321,6 +321,17 @@ struct State
         return true;
     }
 
+    public void BacktraceCrystal(int x, int y)
+    {
+        BoardField field = Board[y, x];
+        Light color = (Light)(field & BoardField.ColorMask);
+
+        AddColorDown(x, y + 1, color);
+        AddColorUp(x, y - 1, color);
+        AddColorLeft(x - 1, y, color);
+        AddColorRight(x + 1, y, color);
+    }
+
     public bool HasColor(Position position)
     {
         return (LightMap[position.Y, position.X] & Light.ColorMask) != Light.Empty;
@@ -543,12 +554,12 @@ struct State
         int height = Height;
         Light direction = Light.Empty;
 
-        if (color == Light.Blue)
-            direction = Light.BlueDown;
-        else if (color == Light.Red)
-            direction = Light.RedDown;
-        else if (color == Light.Yellow)
-            direction = Light.YellowDown;
+        if ((color & Light.Blue) == Light.Blue)
+            direction |= Light.BlueDown;
+        if ((color & Light.Red) == Light.Red)
+            direction |= Light.RedDown;
+        if ((color & Light.Yellow) == Light.Yellow)
+            direction |= Light.YellowDown;
         while (y < height)
         {
             Light originalLight = LightMap[y, x];
@@ -589,12 +600,12 @@ struct State
     {
         Light direction = Light.Empty;
 
-        if (color == Light.Blue)
-            direction = Light.BlueUp;
-        else if (color == Light.Red)
-            direction = Light.RedUp;
-        else if (color == Light.Yellow)
-            direction = Light.YellowUp;
+        if ((color & Light.Blue) == Light.Blue)
+            direction |= Light.BlueUp;
+        if ((color & Light.Red) == Light.Red)
+            direction |= Light.RedUp;
+        if ((color & Light.Yellow) == Light.Yellow)
+            direction |= Light.YellowUp;
         while (y >= 0)
         {
             Light originalLight = LightMap[y, x];
@@ -636,12 +647,12 @@ struct State
         int width = Width;
         Light direction = Light.Empty;
 
-        if (color == Light.Blue)
-            direction = Light.BlueRight;
-        else if (color == Light.Red)
-            direction = Light.RedRight;
-        else if (color == Light.Yellow)
-            direction = Light.YellowRight;
+        if ((color & Light.Blue) == Light.Blue)
+            direction |= Light.BlueRight;
+        if ((color & Light.Red) == Light.Red)
+            direction |= Light.RedRight;
+        if ((color & Light.Yellow) == Light.Yellow)
+            direction |= Light.YellowRight;
         while (x < width)
         {
             Light originalLight = LightMap[y, x];
@@ -682,12 +693,12 @@ struct State
     {
         Light direction = Light.Empty;
 
-        if (color == Light.Blue)
-            direction = Light.BlueLeft;
-        else if (color == Light.Red)
-            direction = Light.RedLeft;
-        else if (color == Light.Yellow)
-            direction = Light.YellowLeft;
+        if ((color & Light.Blue) == Light.Blue)
+            direction |= Light.BlueLeft;
+        if ((color & Light.Red) == Light.Red)
+            direction |= Light.RedLeft;
+        if ((color & Light.Yellow) == Light.Yellow)
+            direction |= Light.YellowLeft;
         while (x >= 0)
         {
             Light originalLight = LightMap[y, x];
@@ -793,7 +804,7 @@ public class CrystalLighting
                 inputState.Board[y, x] = field;
             }
 
-        State solution = new State();
+        State solution = SolveGreedy(inputState, costLantern, costMirror, costObstacle, maxMirrors, maxObstacles);
 
         for (maxRayWidth = 1; sw.Elapsed < maxTime; maxRayWidth *= 5)
         {
@@ -941,6 +952,300 @@ public class CrystalLighting
         return bestSolution;
     }
 
+    private State SolveGreedy(State inputState, int costLantern, int costMirror, int costObstacle, int maxMirrors, int maxObstacles)
+    {
+        State bestSolution = CloneState(inputState);
+        State lightIntersections = CloneState(inputState);
+        int width = inputState.Width;
+        int height = inputState.Height;
+
+        // Backtrace crystals to get potential places for lanterns
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                if ((lightIntersections.Board[y, x] & BoardField.Crystal) == BoardField.Crystal)
+                    lightIntersections.BacktraceCrystal(x, y);
+
+        // Pick all unique intersections
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                BoardField field = bestSolution.Board[y, x];
+
+                if ((field & (BoardField.ColorMask | BoardField.ObjectMask)) != BoardField.Empty)
+                    continue;
+
+                Light light = lightIntersections.LightMap[y, x];
+                Light color = light & Light.ColorMask;
+
+                if (color == Light.Blue)
+                {
+                    Light direction = light & Light.BlueDirectionMask;
+
+                    if (direction == Light.BlueDown || direction == Light.BlueLeft || direction == Light.BlueRight || direction == Light.BlueUp)
+                        continue;
+                    bestSolution.PutLantern(new Position((sbyte)x, (sbyte)y), color, costLantern);
+                }
+                else if (color == Light.Yellow)
+                {
+                    Light direction = light & Light.YellowDirectionMask;
+
+                    if (direction == Light.YellowDown || direction == Light.YellowLeft || direction == Light.YellowRight || direction == Light.YellowUp)
+                        continue;
+                    bestSolution.PutLantern(new Position((sbyte)x, (sbyte)y), color, costLantern);
+                }
+                else if (color == Light.Red)
+                {
+                    Light direction = light & Light.RedDirectionMask;
+
+                    if (direction == Light.RedDown || direction == Light.RedLeft || direction == Light.RedRight || direction == Light.RedUp)
+                        continue;
+                    bestSolution.PutLantern(new Position((sbyte)x, (sbyte)y), color, costLantern);
+                }
+            }
+
+        Console.Error.WriteLine("Greedy clear: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
+
+        // Pick all intersections with 1 error
+        State solution = CloneState(bestSolution);
+
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                BoardField field = bestSolution.Board[y, x];
+
+                if ((field & (BoardField.ColorMask | BoardField.ObjectMask)) != BoardField.Empty)
+                    continue;
+
+                Light light = lightIntersections.LightMap[y, x];
+                Light color = light & Light.ColorMask;
+                Light blueDirection = light & Light.BlueDirectionMask;
+                Light yellowDirection = light & Light.YellowDirectionMask;
+                Light redDirection = light & Light.RedDirectionMask;
+                bool blueMultiple = blueDirection != Light.Empty && blueDirection != Light.BlueDown && blueDirection != Light.BlueLeft && blueDirection != Light.BlueRight && blueDirection != Light.BlueUp;
+                bool yellowMultiple = yellowDirection != Light.Empty && yellowDirection != Light.YellowDown && yellowDirection != Light.YellowLeft && yellowDirection != Light.YellowRight && yellowDirection != Light.YellowUp;
+                bool redMultiple = redDirection != Light.Empty && redDirection != Light.RedDown && redDirection != Light.RedLeft && redDirection != Light.RedRight && redDirection != Light.RedUp;
+
+                if (blueMultiple && !yellowMultiple && !redMultiple)
+                {
+                    if (yellowDirection == Light.Empty || redDirection == Light.Empty)
+                    {
+                        if (solution.PutLantern(new Position((sbyte)x, (sbyte)y), Light.Blue, costLantern))
+                        {
+                            if (solution.Score > bestSolution.Score)
+                                bestSolution.Copy(solution);
+                            else
+                            {
+                                solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                                solution.Board[y, x] = BoardField.Empty;
+                                solution.ShallowCopy(bestSolution);
+                            }
+                        }
+                        else
+                            solution.ShallowCopy(bestSolution);
+                    }
+                }
+                else if (!blueMultiple && yellowMultiple && !redMultiple)
+                {
+                    if (blueDirection == Light.Empty || redDirection == Light.Empty)
+                    {
+                        if (solution.PutLantern(new Position((sbyte)x, (sbyte)y), Light.Yellow, costLantern))
+                        {
+                            if (solution.Score > bestSolution.Score)
+                                bestSolution.Copy(solution);
+                            else
+                            {
+                                solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                                solution.Board[y, x] = BoardField.Empty;
+                                solution.ShallowCopy(bestSolution);
+                            }
+                        }
+                        else
+                            solution.ShallowCopy(bestSolution);
+                    }
+                }
+                else if (!blueMultiple && !yellowMultiple && redMultiple)
+                {
+                    if (blueDirection == Light.Empty || yellowDirection == Light.Empty)
+                    {
+                        if (solution.PutLantern(new Position((sbyte)x, (sbyte)y), Light.Red, costLantern))
+                        {
+                            if (solution.Score > bestSolution.Score)
+                                bestSolution.Copy(solution);
+                            else
+                            {
+                                solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                                solution.Board[y, x] = BoardField.Empty;
+                                solution.ShallowCopy(bestSolution);
+                            }
+                        }
+                        else
+                            solution.ShallowCopy(bestSolution);
+                    }
+                }
+            }
+
+        Console.Error.WriteLine("Greedy 1 error: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
+
+        // Pick all intersections with 1 error
+        solution = CloneState(bestSolution);
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                BoardField field = bestSolution.Board[y, x];
+
+                if ((field & (BoardField.ColorMask | BoardField.ObjectMask)) != BoardField.Empty)
+                    continue;
+
+                Light light = lightIntersections.LightMap[y, x];
+                Light color = light & Light.ColorMask;
+                Light blueDirection = light & Light.BlueDirectionMask;
+                Light yellowDirection = light & Light.YellowDirectionMask;
+                Light redDirection = light & Light.RedDirectionMask;
+                bool blueMultiple = blueDirection != Light.Empty && blueDirection != Light.BlueDown && blueDirection != Light.BlueLeft && blueDirection != Light.BlueRight && blueDirection != Light.BlueUp;
+                bool yellowMultiple = yellowDirection != Light.Empty && yellowDirection != Light.YellowDown && yellowDirection != Light.YellowLeft && yellowDirection != Light.YellowRight && yellowDirection != Light.YellowUp;
+                bool redMultiple = redDirection != Light.Empty && redDirection != Light.RedDown && redDirection != Light.RedLeft && redDirection != Light.RedRight && redDirection != Light.RedUp;
+
+                if (blueMultiple)
+                {
+                    if (solution.PutLantern(new Position((sbyte)x, (sbyte)y), Light.Blue, costLantern))
+                    {
+                        if (solution.Score > bestSolution.Score)
+                        {
+                            bestSolution.Copy(solution);
+                            continue;
+                        }
+                        else
+                        {
+                            solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                            solution.Board[y, x] = BoardField.Empty;
+                            solution.ShallowCopy(bestSolution);
+                        }
+                    }
+                    else
+                        solution.ShallowCopy(bestSolution);
+                }
+                if (yellowMultiple)
+                {
+                    if (solution.PutLantern(new Position((sbyte)x, (sbyte)y), Light.Yellow, costLantern))
+                    {
+                        if (solution.Score > bestSolution.Score)
+                        {
+                            bestSolution.Copy(solution);
+                            continue;
+                        }
+                        else
+                        {
+                            solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                            solution.Board[y, x] = BoardField.Empty;
+                            solution.ShallowCopy(bestSolution);
+                        }
+                    }
+                    else
+                        solution.ShallowCopy(bestSolution);
+                }
+                if (redMultiple)
+                {
+                    if (solution.PutLantern(new Position((sbyte)x, (sbyte)y), Light.Red, costLantern))
+                    {
+                        if (solution.Score > bestSolution.Score)
+                        {
+                            bestSolution.Copy(solution);
+                            continue;
+                        }
+                        else
+                        {
+                            solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                            solution.Board[y, x] = BoardField.Empty;
+                            solution.ShallowCopy(bestSolution);
+                        }
+                    }
+                    else
+                        solution.ShallowCopy(bestSolution);
+                }
+            }
+
+        Console.Error.WriteLine("Greedy 2 errors: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
+
+        // Put lanterns as long as our score increases
+        State previousState = CloneState(bestSolution);
+        State best = CloneState(inputState);
+
+        while (sw.Elapsed < maxTime)
+        {
+            best.Score = 0;
+            solution.Copy(previousState);
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    BoardField field = previousState.Board[y, x];
+
+                    if ((field & (BoardField.ColorMask | BoardField.ObjectMask)) != BoardField.Empty)
+                        continue;
+
+                    Light light = lightIntersections.LightMap[y, x];
+                    Light color = light & Light.ColorMask;
+
+                    if (color == Light.Empty)
+                        continue;
+
+                    Position position = new Position((sbyte)x, (sbyte)y);
+
+                    // Try to put Blue lantern
+                    if ((color & Light.Blue) == Light.Blue)
+                    {
+                        if (solution.PutLantern(position, Light.Blue, costLantern))
+                        {
+                            if (solution.Score > best.Score)
+                                best.Copy(solution);
+                            solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                            solution.Board[position.Y, position.X] = BoardField.Empty;
+                        }
+                        solution.ShallowCopy(previousState);
+                    }
+
+                    // Try to put Yellow lantern
+                    if ((color & Light.Yellow) == Light.Yellow)
+                    {
+                        if (solution.PutLantern(position, Light.Yellow, costLantern))
+                        {
+                            if (solution.Score > best.Score)
+                                best.Copy(solution);
+                            solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                            solution.Board[position.Y, position.X] = BoardField.Empty;
+                        }
+                        solution.ShallowCopy(previousState);
+                    }
+
+                    // Try to put Red lantern
+                    if ((color & Light.Red) == Light.Red)
+                    {
+                        if (solution.PutLantern(position, Light.Red, costLantern))
+                        {
+                            if (solution.Score > best.Score)
+                                best.Copy(solution);
+                            solution.Lanterns.RemoveAt(solution.Lanterns.Count - 1);
+                            solution.Board[position.Y, position.X] = BoardField.Empty;
+                        }
+                        solution.ShallowCopy(previousState);
+                    }
+                }
+
+            if (best.Score == 0)
+                break;
+
+            if (best.Score <= bestSolution.Score)
+                break;
+            bestSolution.Copy(best);
+            previousState.Copy(best);
+        }
+
+        Console.Error.WriteLine("Greedy lanterns: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
+
+        // TODO: Include mirrors in the picture
+
+        return bestSolution;
+    }
+
     private class StateCostComparerClass : IComparer<State>
     {
         public int Compare(State x, State y)
@@ -1019,6 +1324,16 @@ public class CrystalLighting
 
             state = new State(width, height);
         }
+        state.Copy(inputState);
+        return state;
+    }
+
+    private static State CloneState(State inputState)
+    {
+        int height = inputState.Board.GetLength(0);
+        int width = inputState.Board.GetLength(1);
+        State state = new State(width, height);
+
         state.Copy(inputState);
         return state;
     }
