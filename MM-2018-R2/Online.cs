@@ -52,12 +52,43 @@ enum Light : ushort
     DownMask = BlueDown | YellowDown | RedDown,
 }
 
+static class LightExtensions
+{
+    public static Light GetLeftColor(this Light light)
+    {
+        return ((light & Light.BlueLeft) == Light.BlueLeft ? Light.Blue : Light.Empty)
+            | ((light & Light.YellowLeft) == Light.YellowLeft ? Light.Yellow : Light.Empty)
+            | ((light & Light.RedLeft) == Light.RedLeft ? Light.Red : Light.Empty);
+    }
+
+    public static Light GetRightColor(this Light light)
+    {
+        return ((light & Light.BlueRight) == Light.BlueRight ? Light.Blue : Light.Empty)
+            | ((light & Light.YellowRight) == Light.YellowRight ? Light.Yellow : Light.Empty)
+            | ((light & Light.RedRight) == Light.RedRight ? Light.Red : Light.Empty);
+    }
+
+    public static Light GetDownColor(this Light light)
+    {
+        return ((light & Light.BlueDown) == Light.BlueDown ? Light.Blue : Light.Empty)
+            | ((light & Light.YellowDown) == Light.YellowDown ? Light.Yellow : Light.Empty)
+            | ((light & Light.RedDown) == Light.RedDown ? Light.Red : Light.Empty);
+    }
+
+    public static Light GetUpColor(this Light light)
+    {
+        return ((light & Light.BlueUp) == Light.BlueUp ? Light.Blue : Light.Empty)
+            | ((light & Light.YellowUp) == Light.YellowUp ? Light.Yellow : Light.Empty)
+            | ((light & Light.RedUp) == Light.RedUp ? Light.Red : Light.Empty);
+    }
+}
+
 struct Position
 {
-    public sbyte X;
-    public sbyte Y;
+    public int X;
+    public int Y;
 
-    public Position(sbyte x, sbyte y)
+    public Position(int x, int y)
         : this()
     {
         X = x;
@@ -124,6 +155,8 @@ struct State
     public int Score;
     public int PotentialScore;
     public int Hash;
+
+    private static Position[] dummyHits = new Position[12];
 
     public int Height { get { return Board.GetLength(0); } }
     public int Width { get { return Board.GetLength(1); } }
@@ -204,16 +237,15 @@ struct State
         return true;
     }
 
-    public bool PutLantern(Position position, Light color, int cost)
+    public bool PutLantern(Position position, Light color, int cost, Position[] hits = null)
     {
-        if (!AddColorLeft(position.X - 1, position.Y, color))
+        if ((LightMap[position.Y, position.X] & Light.ColorMask) != Light.Empty)
             return false;
-        if (!AddColorRight(position.X + 1, position.Y, color))
-            return false;
-        if (!AddColorUp(position.X, position.Y - 1, color))
-            return false;
-        if (!AddColorDown(position.X, position.Y + 1, color))
-            return false;
+        hits = hits ?? dummyHits;
+        hits[0] = AddColorLeft(position.X - 1, position.Y, color);
+        hits[1] = AddColorRight(position.X + 1, position.Y, color);
+        hits[2] = AddColorUp(position.X, position.Y - 1, color);
+        hits[3] = AddColorDown(position.X, position.Y + 1, color);
         Score -= cost;
         PotentialScore -= cost;
         BoardField fieldColor = BoardField.Empty;
@@ -233,12 +265,13 @@ struct State
         return true;
     }
 
-    public void RemoveLantern(Position position, int cost, int previousHash)
+    public void RemoveLantern(Position position, int cost, int previousHash, Position[] hits = null)
     {
-        ClearColorLeft(position.X - 1, position.Y);
-        ClearColorRight(position.X + 1, position.Y);
-        ClearColorUp(position.X, position.Y - 1);
-        ClearColorDown(position.X, position.Y + 1);
+        hits = hits ?? dummyHits;
+        hits[0] = ClearColorLeft(position.X - 1, position.Y);
+        hits[1] = ClearColorRight(position.X + 1, position.Y);
+        hits[2] = ClearColorUp(position.X, position.Y - 1);
+        hits[3] = ClearColorDown(position.X, position.Y + 1);
         Score += cost;
         PotentialScore += cost;
         Board[position.Y, position.X] = BoardField.Empty;
@@ -257,7 +290,15 @@ struct State
 
     public void PutObstacle(Position position, int cost)
     {
-        ClearColor(position);
+        int hitsCount;
+
+        PutObstacle(position, cost, dummyHits, out hitsCount);
+    }
+
+    public void PutObstacle(Position position, int cost, Position[] hits, out int hitsCount)
+    {
+        hitsCount = 0;
+        ClearColor(position, hits, ref hitsCount);
         Score -= cost;
         PotentialScore -= cost;
         Obstacles.Add(new Obstacle()
@@ -349,7 +390,16 @@ struct State
 
     public bool PutMirror(Position position, BoardField mirrorType, int cost)
     {
+        int hitsCount;
+
+        return PutMirror(position, mirrorType, cost, dummyHits, out hitsCount);
+    }
+
+    public bool PutMirror(Position position, BoardField mirrorType, int cost, Position[] hits, out int hitsCount)
+    {
         Light light = LightMap[position.Y, position.X];
+
+        hitsCount = 0;
 
         // Check if it will succeed
         Light up = light & Light.UpMask;
@@ -373,7 +423,7 @@ struct State
         }
 
         // Correct light path
-        ClearColor(position);
+        ClearColor(position, hits, ref hitsCount);
         if (mirrorType == BoardField.MirrorSlash)
         {
             if ((light & Light.LeftMask) != Light.Empty)
@@ -382,8 +432,7 @@ struct State
                     | ((light & Light.YellowLeft) == Light.YellowLeft ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedLeft) == Light.RedLeft ? Light.Red : Light.Empty);
 
-                if (!AddColorDown(position.X, position.Y + 1, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorDown(position.X, position.Y + 1, color);
             }
             if ((light & Light.RightMask) != Light.Empty)
             {
@@ -391,8 +440,7 @@ struct State
                     | ((light & Light.YellowRight) == Light.YellowRight ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedRight) == Light.RedRight ? Light.Red : Light.Empty);
 
-                if (!AddColorUp(position.X, position.Y - 1, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorUp(position.X, position.Y - 1, color);
             }
             if ((light & Light.DownMask) != Light.Empty)
             {
@@ -400,8 +448,7 @@ struct State
                     | ((light & Light.YellowDown) == Light.YellowDown ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedDown) == Light.RedDown ? Light.Red : Light.Empty);
 
-                if (!AddColorLeft(position.X - 1, position.Y, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorLeft(position.X - 1, position.Y, color);
             }
             if ((light & Light.UpMask) != Light.Empty)
             {
@@ -409,8 +456,7 @@ struct State
                     | ((light & Light.YellowUp) == Light.YellowUp ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedUp) == Light.RedUp ? Light.Red : Light.Empty);
 
-                if (!AddColorRight(position.X + 1, position.Y, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorRight(position.X + 1, position.Y, color);
             }
         }
         else
@@ -421,8 +467,7 @@ struct State
                     | ((light & Light.YellowLeft) == Light.YellowLeft ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedLeft) == Light.RedLeft ? Light.Red : Light.Empty);
 
-                if (!AddColorUp(position.X, position.Y - 1, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorUp(position.X, position.Y - 1, color);
             }
             if ((light & Light.RightMask) != Light.Empty)
             {
@@ -430,8 +475,7 @@ struct State
                     | ((light & Light.YellowRight) == Light.YellowRight ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedRight) == Light.RedRight ? Light.Red : Light.Empty);
 
-                if (!AddColorDown(position.X, position.Y + 1, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorDown(position.X, position.Y + 1, color);
             }
             if ((light & Light.DownMask) != Light.Empty)
             {
@@ -439,8 +483,7 @@ struct State
                     | ((light & Light.YellowDown) == Light.YellowDown ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedDown) == Light.RedDown ? Light.Red : Light.Empty);
 
-                if (!AddColorRight(position.X + 1, position.Y, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorRight(position.X + 1, position.Y, color);
             }
             if ((light & Light.UpMask) != Light.Empty)
             {
@@ -448,8 +491,7 @@ struct State
                     | ((light & Light.YellowUp) == Light.YellowUp ? Light.Yellow : Light.Empty)
                     | ((light & Light.RedUp) == Light.RedUp ? Light.Red : Light.Empty);
 
-                if (!AddColorLeft(position.X - 1, position.Y, color))
-                    throw new Exception("ASDFASDF");
+                hits[hitsCount++] = AddColorLeft(position.X - 1, position.Y, color);
             }
         }
         Score -= cost;
@@ -466,12 +508,20 @@ struct State
 
     public bool RemoveMirror(Position position, int cost, int previousHash)
     {
+        int hitsCount;
+
+        return RemoveMirror(position, cost, previousHash, dummyHits, out hitsCount);
+    }
+
+    public bool RemoveMirror(Position position, int cost, int previousHash, Position[] hits, out int hitsCount)
+    {
         Light light = LightMap[position.Y, position.X];
         bool hasLeft = (light & Light.LeftMask) != Light.Empty;
         bool hasRight = (light & Light.RightMask) != Light.Empty;
         bool hasDown = (light & Light.DownMask) != Light.Empty;
         bool hasUp = (light & Light.UpMask) != Light.Empty;
 
+        hitsCount = 0;
         if (hasLeft && hasRight)
             return false;
         if (hasUp && hasDown)
@@ -480,24 +530,24 @@ struct State
         if (Board[position.Y, position.X] == BoardField.MirrorSlash)
         {
             if (hasLeft)
-                ClearColorDown(position.X, position.Y + 1);
+                hits[hitsCount++] = ClearColorDown(position.X, position.Y + 1);
             if (hasRight)
-                ClearColorUp(position.X, position.Y - 1);
+                hits[hitsCount++] = ClearColorUp(position.X, position.Y - 1);
             if (hasDown)
-                ClearColorLeft(position.X - 1, position.Y);
+                hits[hitsCount++] = ClearColorLeft(position.X - 1, position.Y);
             if (hasUp)
-                ClearColorRight(position.X + 1, position.Y);
+                hits[hitsCount++] = ClearColorRight(position.X + 1, position.Y);
         }
         else
         {
             if (hasLeft)
-                ClearColorUp(position.X, position.Y - 1);
+                hits[hitsCount++] = ClearColorUp(position.X, position.Y - 1);
             if (hasRight)
-                ClearColorDown(position.X, position.Y + 1);
+                hits[hitsCount++] = ClearColorDown(position.X, position.Y + 1);
             if (hasDown)
-                ClearColorRight(position.X + 1, position.Y);
+                hits[hitsCount++] = ClearColorRight(position.X + 1, position.Y);
             if (hasUp)
-                ClearColorLeft(position.X - 1, position.Y);
+                hits[hitsCount++] = ClearColorLeft(position.X - 1, position.Y);
         }
         if (hasLeft)
         {
@@ -505,7 +555,7 @@ struct State
                 | ((light & Light.YellowLeft) == Light.YellowLeft ? Light.Yellow : Light.Empty)
                 | ((light & Light.RedLeft) == Light.RedLeft ? Light.Red : Light.Empty);
 
-            AddColorLeft(position.X - 1, position.Y, color);
+            hits[hitsCount++] = AddColorLeft(position.X - 1, position.Y, color);
         }
         if (hasRight)
         {
@@ -513,7 +563,7 @@ struct State
                 | ((light & Light.YellowRight) == Light.YellowRight ? Light.Yellow : Light.Empty)
                 | ((light & Light.RedRight) == Light.RedRight ? Light.Red : Light.Empty);
 
-            AddColorRight(position.X + 1, position.Y, color);
+            hits[hitsCount++] = AddColorRight(position.X + 1, position.Y, color);
         }
         if (hasDown)
         {
@@ -521,7 +571,7 @@ struct State
                 | ((light & Light.YellowDown) == Light.YellowDown ? Light.Yellow : Light.Empty)
                 | ((light & Light.RedDown) == Light.RedDown ? Light.Red : Light.Empty);
 
-            AddColorDown(position.X, position.Y + 1, color);
+            hits[hitsCount++] = AddColorDown(position.X, position.Y + 1, color);
         }
         if (hasUp)
         {
@@ -529,7 +579,7 @@ struct State
                 | ((light & Light.YellowUp) == Light.YellowUp ? Light.Yellow : Light.Empty)
                 | ((light & Light.RedUp) == Light.RedUp ? Light.Red : Light.Empty);
 
-            AddColorUp(position.X, position.Y - 1, color);
+            hits[hitsCount++] = AddColorUp(position.X, position.Y - 1, color);
         }
         Score += cost;
         PotentialScore += cost;
@@ -553,10 +603,23 @@ struct State
         BoardField field = Board[y, x];
         Light color = (Light)(field & BoardField.ColorMask);
 
+        BacktraceCrystal(x, y, color);
+    }
+
+    public void BacktraceCrystal(int x, int y, Light color)
+    {
         AddColorDown(x, y + 1, color);
         AddColorUp(x, y - 1, color);
         AddColorLeft(x - 1, y, color);
         AddColorRight(x + 1, y, color);
+    }
+
+    public void UndoBacktraceCrystal(int x, int y)
+    {
+        ClearColorDown(x, y + 1);
+        ClearColorUp(x, y - 1);
+        ClearColorLeft(x - 1, y);
+        ClearColorRight(x + 1, y);
     }
 
     public bool HasColor(Position position)
@@ -569,21 +632,21 @@ struct State
         return (Board[position.Y, position.X] & BoardField.ObjectMask) != BoardField.Empty;
     }
 
-    private void ClearColor(Position position)
+    private void ClearColor(Position position, Position[] hits, ref int hitsCount)
     {
         Light lightDirection = LightMap[position.Y, position.X];
 
         if ((lightDirection & Light.LeftMask) != Light.Empty)
-            ClearColorLeft(position.X - 1, position.Y);
+            hits[hitsCount++] = ClearColorLeft(position.X - 1, position.Y);
         if ((lightDirection & Light.RightMask) != Light.Empty)
-            ClearColorRight(position.X + 1, position.Y);
+            hits[hitsCount++] = ClearColorRight(position.X + 1, position.Y);
         if ((lightDirection & Light.DownMask) != Light.Empty)
-            ClearColorDown(position.X, position.Y + 1);
+            hits[hitsCount++] = ClearColorDown(position.X, position.Y + 1);
         if ((lightDirection & Light.UpMask) != Light.Empty)
-            ClearColorUp(position.X, position.Y - 1);
+            hits[hitsCount++] = ClearColorUp(position.X, position.Y - 1);
     }
 
-    private void ClearColorDown(int x, int y)
+    private Position ClearColorDown(int x, int y)
     {
         int height = Height;
 
@@ -610,15 +673,9 @@ struct State
             BoardField field = Board[y, x];
 
             if ((field & BoardField.MirrorSlash) == BoardField.MirrorSlash)
-            {
-                ClearColorLeft(x - 1, y);
-                break;
-            }
+                return ClearColorLeft(x - 1, y);
             if ((field & BoardField.MirrorBackSlash) == BoardField.MirrorBackSlash)
-            {
-                ClearColorRight(x + 1, y);
-                break;
-            }
+                return ClearColorRight(x + 1, y);
 
             // If we hit crystal, update score
             if ((field & BoardField.Crystal) == BoardField.Crystal)
@@ -629,9 +686,10 @@ struct State
                 break;
             y++;
         }
+        return new Position(-x, -y);
     }
 
-    private void ClearColorUp(int x, int y)
+    private Position ClearColorUp(int x, int y)
     {
         while (y >= 0)
         {
@@ -656,15 +714,9 @@ struct State
             BoardField field = Board[y, x];
 
             if ((field & BoardField.MirrorSlash) == BoardField.MirrorSlash)
-            {
-                ClearColorRight(x + 1, y);
-                break;
-            }
+                return ClearColorRight(x + 1, y);
             if ((field & BoardField.MirrorBackSlash) == BoardField.MirrorBackSlash)
-            {
-                ClearColorLeft(x - 1, y);
-                break;
-            }
+                return ClearColorLeft(x - 1, y);
 
             // If we hit crystal, update score
             if ((field & BoardField.Crystal) == BoardField.Crystal)
@@ -675,9 +727,10 @@ struct State
                 break;
             y--;
         }
+        return new Position(-x, -y);
     }
 
-    private void ClearColorLeft(int x, int y)
+    private Position ClearColorLeft(int x, int y)
     {
         while (x >= 0)
         {
@@ -702,15 +755,9 @@ struct State
             BoardField field = Board[y, x];
 
             if ((field & BoardField.MirrorSlash) == BoardField.MirrorSlash)
-            {
-                ClearColorDown(x, y + 1);
-                break;
-            }
+                return ClearColorDown(x, y + 1);
             if ((field & BoardField.MirrorBackSlash) == BoardField.MirrorBackSlash)
-            {
-                ClearColorUp(x, y - 1);
-                break;
-            }
+                return ClearColorUp(x, y - 1);
 
             // If we hit crystal, update score
             if ((field & BoardField.Crystal) == BoardField.Crystal)
@@ -721,9 +768,10 @@ struct State
                 break;
             x--;
         }
+        return new Position(-x, -y);
     }
 
-    private void ClearColorRight(int x, int y)
+    private Position ClearColorRight(int x, int y)
     {
         int width = Width;
 
@@ -750,15 +798,9 @@ struct State
             BoardField field = Board[y, x];
 
             if ((field & BoardField.MirrorSlash) == BoardField.MirrorSlash)
-            {
-                ClearColorUp(x, y - 1);
-                break;
-            }
+                return ClearColorUp(x, y - 1);
             if ((field & BoardField.MirrorBackSlash) == BoardField.MirrorBackSlash)
-            {
-                ClearColorDown(x, y + 1);
-                break;
-            }
+                return ClearColorDown(x, y + 1);
 
             // If we hit crystal, update score
             if ((field & BoardField.Crystal) == BoardField.Crystal)
@@ -769,9 +811,10 @@ struct State
                 break;
             x++;
         }
+        return new Position(-x, -y);
     }
 
-    private bool AddColorDown(int x, int y, Light color)
+    private Position AddColorDown(int x, int y, Light color)
     {
         int height = Height;
         Light direction = Light.Empty;
@@ -808,17 +851,17 @@ struct State
 
             // If we hit lantern we played wrong move
             if ((field & BoardField.Lantern) == BoardField.Lantern)
-                return false;
+                return new Position(x, y);
 
             // Stop if we hit an object
             if ((field & BoardField.ObjectMask) != BoardField.Empty)
                 break;
             y++;
         }
-        return true;
+        return new Position(x, y);
     }
 
-    private bool AddColorUp(int x, int y, Light color)
+    private Position AddColorUp(int x, int y, Light color)
     {
         Light direction = Light.Empty;
 
@@ -854,17 +897,17 @@ struct State
 
             // If we hit lantern we played wrong move
             if ((field & BoardField.Lantern) == BoardField.Lantern)
-                return false;
+                return new Position(x, y);
 
             // Stop if we hit an object
             if ((field & BoardField.ObjectMask) != BoardField.Empty)
                 break;
             y--;
         }
-        return true;
+        return new Position(x, y);
     }
 
-    private bool AddColorRight(int x, int y, Light color)
+    private Position AddColorRight(int x, int y, Light color)
     {
         int width = Width;
         Light direction = Light.Empty;
@@ -901,17 +944,17 @@ struct State
 
             // If we hit lantern we played wrong move
             if ((field & BoardField.Lantern) == BoardField.Lantern)
-                return false;
+                return new Position(x, y);
 
             // Stop if we hit an object
             if ((field & BoardField.ObjectMask) != BoardField.Empty)
                 break;
             x++;
         }
-        return true;
+        return new Position(x, y);
     }
 
-    private bool AddColorLeft(int x, int y, Light color)
+    private Position AddColorLeft(int x, int y, Light color)
     {
         Light direction = Light.Empty;
 
@@ -947,14 +990,14 @@ struct State
 
             // If we hit lantern we played wrong move
             if ((field & BoardField.Lantern) == BoardField.Lantern)
-                return false;
+                return new Position(x, y);
 
             // Stop if we hit an object
             if ((field & BoardField.ObjectMask) != BoardField.Empty)
                 break;
             x--;
         }
-        return true;
+        return new Position(x, y);
     }
 
     private void UpdateCrystal(int x, int y, Light originalLight)
@@ -975,6 +1018,14 @@ struct State
 
             PotentialScore += newPotentialScore - previousPotentialScore;
         }
+    }
+
+    internal static int GetCrystalScoreDiff(Light previousColor, Light color, Light newColor)
+    {
+        int previousScore = GetCrystalScore(color, previousColor);
+        int newScore = GetCrystalScore(color, newColor);
+
+        return newScore - previousScore;
     }
 
     private static int GetCrystalScore(Light crystalColor, Light lightColor)
@@ -1006,6 +1057,118 @@ struct State
             return 30;
         }
         return 5;
+    }
+}
+
+struct ExtendedState
+{
+    public State State;
+    public State CrystalLights;
+    public State UnlitedCrystalLights;
+    private Position[] HitsCache;
+
+    public ExtendedState(State inputState)
+        : this()
+    {
+        int width = inputState.Width;
+        int height = inputState.Height;
+
+        State = CloneState(inputState);
+        CrystalLights = CloneState(inputState);
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                if ((CrystalLights.Board[y, x] & BoardField.Crystal) == BoardField.Crystal)
+                    CrystalLights.BacktraceCrystal(x, y);
+        UnlitedCrystalLights = CloneState(CrystalLights);
+        HitsCache = new Position[12];
+    }
+
+    public int GetLanternScore(Position position, Light light, int cost)
+    {
+        Light crystalLights = CrystalLights.LightMap[position.Y, position.X];
+        Light unlitedCrystalLights = UnlitedCrystalLights.LightMap[position.Y, position.X];
+        Light leftCrystal = crystalLights.GetLeftColor();
+        Light rightCrystal = crystalLights.GetRightColor();
+        Light downCrystal = crystalLights.GetDownColor();
+        Light upCrystal = crystalLights.GetUpColor();
+        int score = State.Score - cost;
+
+        if (leftCrystal != Light.Empty)
+        {
+            Light crystal = leftCrystal;
+            Light unlitedCrystal = unlitedCrystalLights.GetLeftColor();
+            Light previousColor = crystal ^ unlitedCrystal;
+            Light color = crystal;
+            Light newColor = previousColor | light;
+
+            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+        }
+        if (rightCrystal != Light.Empty)
+        {
+            Light crystal = rightCrystal;
+            Light unlitedCrystal = unlitedCrystalLights.GetRightColor();
+            Light previousColor = crystal ^ unlitedCrystal;
+            Light color = crystal;
+            Light newColor = previousColor | light;
+
+            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+        }
+        if (downCrystal != Light.Empty)
+        {
+            Light crystal = downCrystal;
+            Light unlitedCrystal = unlitedCrystalLights.GetDownColor();
+            Light previousColor = crystal ^ unlitedCrystal;
+            Light color = crystal;
+            Light newColor = previousColor | light;
+
+            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+        }
+        if (upCrystal != Light.Empty)
+        {
+            Light crystal = upCrystal;
+            Light unlitedCrystal = unlitedCrystalLights.GetUpColor();
+            Light previousColor = crystal ^ unlitedCrystal;
+            Light color = crystal;
+            Light newColor = previousColor | light;
+
+            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+        }
+
+        return score;
+    }
+
+    public bool PutLantern(Position position, Light light, int cost)
+    {
+        int hitsCount = 4;
+        Position[] hits = HitsCache;
+
+        if (!State.PutLantern(position, light, cost, hits))
+            return false;
+        for (int i = 0; i < hitsCount; i++)
+            if (hits[i].X >= 0 && hits[i].Y >= 0 && hits[i].Y < State.Height && hits[i].X < State.Width)
+            {
+                BoardField field = State.Board[hits[i].Y, hits[i].X];
+
+                if ((field & BoardField.Crystal) == BoardField.Crystal)
+                {
+                    Light crystalColor = (Light)(State.Board[hits[i].Y, hits[i].X] & BoardField.ColorMask);
+                    Light crystalLight = State.LightMap[hits[i].Y, hits[i].X] & Light.ColorMask;
+
+                    UnlitedCrystalLights.UndoBacktraceCrystal(hits[i].X, hits[i].Y);
+                    UnlitedCrystalLights.BacktraceCrystal(hits[i].X, hits[i].Y, crystalColor ^ crystalLight);
+                }
+            }
+        return true;
+    }
+
+    private static State CloneState(State inputState)
+    {
+        int height = inputState.Board.GetLength(0);
+        int width = inputState.Board.GetLength(1);
+        State state = new State(width, height);
+
+        state.Copy(inputState);
+        return state;
     }
 }
 
@@ -1082,8 +1245,8 @@ public class CrystalLighting
         int previousSolutionsCount = 0;
         State solution = CloneState(stateCache, ref stateCacheCount, inputState);
         State bestSolution = CloneState(stateCache, ref stateCacheCount, inputState);
-        sbyte height = (sbyte)inputState.Board.GetLength(0);
-        sbyte width = (sbyte)inputState.Board.GetLength(1);
+        int height = inputState.Height;
+        int width = inputState.Width;
         Position position = new Position();
         int steps = 0;
 
@@ -1184,16 +1347,16 @@ public class CrystalLighting
     private State SolveGreedy(State inputState, int costLantern, int costMirror, int costObstacle, int maxMirrors, int maxObstacles)
     {
         State bestSolution = CloneState(inputState);
-        State lightIntersections = CloneState(inputState);
+        State crystalLights = CloneState(inputState); // TODO: Remove
         int width = inputState.Width;
         int height = inputState.Height;
-        State solution = CloneState(bestSolution);
+        ExtendedState extendedState = new ExtendedState(inputState);
 
         // Backtrace crystals to get potential places for lanterns
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
-                if ((lightIntersections.Board[y, x] & BoardField.Crystal) == BoardField.Crystal)
-                    lightIntersections.BacktraceCrystal(x, y);
+                if ((crystalLights.Board[y, x] & BoardField.Crystal) == BoardField.Crystal)
+                    crystalLights.BacktraceCrystal(x, y);
 
         // Pick all unique intersections
         for (int y = 0; y < height; y++)
@@ -1202,7 +1365,7 @@ public class CrystalLighting
                 if ((bestSolution.Board[y, x] != BoardField.Empty) || (bestSolution.LightMap[y, x] != Light.Empty))
                     continue;
 
-                Light light = lightIntersections.LightMap[y, x];
+                Light light = crystalLights.LightMap[y, x];
                 Light color = light & Light.ColorMask;
 
                 if (color == Light.Blue)
@@ -1211,7 +1374,8 @@ public class CrystalLighting
 
                     if (direction == Light.BlueDown || direction == Light.BlueLeft || direction == Light.BlueRight || direction == Light.BlueUp)
                         continue;
-                    bestSolution.PutLantern(new Position((sbyte)x, (sbyte)y), color, costLantern);
+                    bestSolution.PutLantern(new Position(x, y), color, costLantern);
+                    extendedState.PutLantern(new Position(x, y), color, costLantern);
                 }
                 else if (color == Light.Yellow)
                 {
@@ -1219,7 +1383,8 @@ public class CrystalLighting
 
                     if (direction == Light.YellowDown || direction == Light.YellowLeft || direction == Light.YellowRight || direction == Light.YellowUp)
                         continue;
-                    bestSolution.PutLantern(new Position((sbyte)x, (sbyte)y), color, costLantern);
+                    bestSolution.PutLantern(new Position(x, y), color, costLantern);
+                    extendedState.PutLantern(new Position(x, y), color, costLantern);
                 }
                 else if (color == Light.Red)
                 {
@@ -1227,22 +1392,21 @@ public class CrystalLighting
 
                     if (direction == Light.RedDown || direction == Light.RedLeft || direction == Light.RedRight || direction == Light.RedUp)
                         continue;
-                    bestSolution.PutLantern(new Position((sbyte)x, (sbyte)y), color, costLantern);
+                    bestSolution.PutLantern(new Position(x, y), color, costLantern);
+                    extendedState.PutLantern(new Position(x, y), color, costLantern);
                 }
             }
 
         Console.Error.WriteLine("Greedy clear: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
 
         // Pick all intersections with 1 error
-        solution = CloneState(bestSolution);
-
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
             {
                 if ((bestSolution.Board[y, x] != BoardField.Empty) || (bestSolution.LightMap[y, x] != Light.Empty))
                     continue;
 
-                Light light = lightIntersections.LightMap[y, x];
+                Light light = crystalLights.LightMap[y, x];
                 Light color = light & Light.ColorMask;
                 Light blueDirection = light & Light.BlueDirectionMask;
                 Light yellowDirection = light & Light.YellowDirectionMask;
@@ -1250,39 +1414,42 @@ public class CrystalLighting
                 bool blueMultiple = blueDirection != Light.Empty && blueDirection != Light.BlueDown && blueDirection != Light.BlueLeft && blueDirection != Light.BlueRight && blueDirection != Light.BlueUp;
                 bool yellowMultiple = yellowDirection != Light.Empty && yellowDirection != Light.YellowDown && yellowDirection != Light.YellowLeft && yellowDirection != Light.YellowRight && yellowDirection != Light.YellowUp;
                 bool redMultiple = redDirection != Light.Empty && redDirection != Light.RedDown && redDirection != Light.RedLeft && redDirection != Light.RedRight && redDirection != Light.RedUp;
-                Position position = new Position((sbyte)x, (sbyte)y);
+                Position position = new Position(x, y);
 
                 if (blueMultiple && !yellowMultiple && !redMultiple)
                 {
                     if (yellowDirection == Light.Empty || redDirection == Light.Empty)
                     {
-                        solution.PutLantern(position, Light.Blue, costLantern);
-                        if (solution.Score > bestSolution.Score)
+                        int score = extendedState.GetLanternScore(position, Light.Blue, costLantern);
+                        if (score > bestSolution.Score)
+                        {
                             bestSolution.PutLantern(position, Light.Blue, costLantern);
-                        else
-                            solution.RemoveLantern(position, costLantern, bestSolution.Hash);
+                            extendedState.PutLantern(position, Light.Blue, costLantern);
+                        }
                     }
                 }
                 else if (!blueMultiple && yellowMultiple && !redMultiple)
                 {
                     if (blueDirection == Light.Empty || redDirection == Light.Empty)
                     {
-                        solution.PutLantern(position, Light.Yellow, costLantern);
-                        if (solution.Score > bestSolution.Score)
+                        int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern);
+                        if (score > bestSolution.Score)
+                        {
                             bestSolution.PutLantern(position, Light.Yellow, costLantern);
-                        else
-                            solution.RemoveLantern(position, costLantern, bestSolution.Hash);
+                            extendedState.PutLantern(new Position(x, y), Light.Yellow, costLantern);
+                        }
                     }
                 }
                 else if (!blueMultiple && !yellowMultiple && redMultiple)
                 {
                     if (blueDirection == Light.Empty || yellowDirection == Light.Empty)
                     {
-                        solution.PutLantern(position, Light.Red, costLantern);
-                        if (solution.Score > bestSolution.Score)
+                        int score = extendedState.GetLanternScore(position, Light.Red, costLantern);
+                        if (score > bestSolution.Score)
+                        {
                             bestSolution.PutLantern(position, Light.Red, costLantern);
-                        else
-                            solution.RemoveLantern(position, costLantern, bestSolution.Hash);
+                            extendedState.PutLantern(new Position(x, y), Light.Red, costLantern);
+                        }
                     }
                 }
             }
@@ -1290,14 +1457,13 @@ public class CrystalLighting
         Console.Error.WriteLine("Greedy 1 error: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
 
         // Pick all intersections with any number of errors
-        solution = CloneState(bestSolution);
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
             {
                 if ((bestSolution.Board[y, x] != BoardField.Empty) || (bestSolution.LightMap[y, x] != Light.Empty))
                     continue;
 
-                Light light = lightIntersections.LightMap[y, x];
+                Light light = crystalLights.LightMap[y, x];
                 Light color = light & Light.ColorMask;
                 Light blueDirection = light & Light.BlueDirectionMask;
                 Light yellowDirection = light & Light.YellowDirectionMask;
@@ -1305,40 +1471,37 @@ public class CrystalLighting
                 bool blueMultiple = blueDirection != Light.Empty && blueDirection != Light.BlueDown && blueDirection != Light.BlueLeft && blueDirection != Light.BlueRight && blueDirection != Light.BlueUp;
                 bool yellowMultiple = yellowDirection != Light.Empty && yellowDirection != Light.YellowDown && yellowDirection != Light.YellowLeft && yellowDirection != Light.YellowRight && yellowDirection != Light.YellowUp;
                 bool redMultiple = redDirection != Light.Empty && redDirection != Light.RedDown && redDirection != Light.RedLeft && redDirection != Light.RedRight && redDirection != Light.RedUp;
-                Position position = new Position((sbyte)x, (sbyte)y);
+                Position position = new Position(x, y);
 
                 if (blueMultiple)
                 {
-                    solution.PutLantern(position, Light.Blue, costLantern);
-                    if (solution.Score > bestSolution.Score)
+                    int score = extendedState.GetLanternScore(position, Light.Blue, costLantern);
+                    if (score > bestSolution.Score)
                     {
                         bestSolution.PutLantern(position, Light.Blue, costLantern);
+                        extendedState.PutLantern(position, Light.Blue, costLantern);
                         continue;
                     }
-                    else
-                        solution.RemoveLantern(position, costLantern, bestSolution.Hash);
                 }
                 if (yellowMultiple)
                 {
-                    solution.PutLantern(position, Light.Yellow, costLantern);
-                    if (solution.Score > bestSolution.Score)
+                    int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern);
+                    if (score > bestSolution.Score)
                     {
                         bestSolution.PutLantern(position, Light.Yellow, costLantern);
+                        extendedState.PutLantern(position, Light.Yellow, costLantern);
                         continue;
                     }
-                    else
-                        solution.RemoveLantern(position, costLantern, bestSolution.Hash);
                 }
                 if (redMultiple)
                 {
-                    solution.PutLantern(position, Light.Red, costLantern);
-                    if (solution.Score > bestSolution.Score)
+                    int score = extendedState.GetLanternScore(position, Light.Red, costLantern);
+                    if (score > bestSolution.Score)
                     {
                         bestSolution.PutLantern(position, Light.Red, costLantern);
+                        extendedState.PutLantern(position, Light.Red, costLantern);
                         continue;
                     }
-                    else
-                        solution.RemoveLantern(position, costLantern, bestSolution.Hash);
                 }
             }
 
@@ -1352,58 +1515,55 @@ public class CrystalLighting
             Position bestLanternPosition = new Position();
             Light bestLanternColor = Light.Empty;
             int bestScore = 0;
-            solution.Copy(previousState);
+
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
                 {
                     if ((bestSolution.Board[y, x] != BoardField.Empty) || (bestSolution.LightMap[y, x] != Light.Empty))
                         continue;
 
-                    Light light = lightIntersections.LightMap[y, x];
+                    Light light = crystalLights.LightMap[y, x];
                     Light color = light & Light.ColorMask;
 
                     if (color == Light.Empty)
                         continue;
 
-                    Position position = new Position((sbyte)x, (sbyte)y);
+                    Position position = new Position(x, y);
 
                     // Try to put Blue lantern
                     if ((color & Light.Blue) == Light.Blue)
                     {
-                        if (solution.PutLantern(position, Light.Blue, costLantern))
-                            if (solution.Score > bestScore)
-                            {
-                                bestScore = solution.Score;
-                                bestLanternColor = Light.Blue;
-                                bestLanternPosition = position;
-                            }
-                        solution.RemoveLantern(position, costLantern, previousState.Hash);
+                        int score = extendedState.GetLanternScore(position, Light.Blue, costLantern);
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestLanternColor = Light.Blue;
+                            bestLanternPosition = position;
+                        }
                     }
 
                     // Try to put Yellow lantern
                     if ((color & Light.Yellow) == Light.Yellow)
                     {
-                        if (solution.PutLantern(position, Light.Yellow, costLantern))
-                            if (solution.Score > bestScore)
-                            {
-                                bestScore = solution.Score;
-                                bestLanternColor = Light.Yellow;
-                                bestLanternPosition = position;
-                            }
-                        solution.RemoveLantern(position, costLantern, previousState.Hash);
+                        int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern);
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestLanternColor = Light.Yellow;
+                            bestLanternPosition = position;
+                        }
                     }
 
                     // Try to put Red lantern
                     if ((color & Light.Red) == Light.Red)
                     {
-                        if (solution.PutLantern(position, Light.Red, costLantern))
-                            if (solution.Score > bestScore)
-                            {
-                                bestScore = solution.Score;
-                                bestLanternColor = Light.Red;
-                                bestLanternPosition = position;
-                            }
-                        solution.RemoveLantern(position, costLantern, previousState.Hash);
+                        int score = extendedState.GetLanternScore(position, Light.Red, costLantern);
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestLanternColor = Light.Red;
+                            bestLanternPosition = position;
+                        }
                     }
                 }
 
@@ -1414,12 +1574,14 @@ public class CrystalLighting
                 break;
             bestSolution.PutLantern(bestLanternPosition, bestLanternColor, costLantern);
             previousState.PutLantern(bestLanternPosition, bestLanternColor, costLantern);
+            extendedState.PutLantern(bestLanternPosition, bestLanternColor, costLantern);
         }
 
         Console.Error.WriteLine("Greedy lanterns: {0} ({1}s)", bestSolution.Score, sw.Elapsed.TotalSeconds);
 
         // Continue with lanterns, mirrors and obstacles
-        int removals = 0, maxRemovals = (bestSolution.Lanterns.Count + bestSolution.Obstacles.Count + bestSolution.Mirrors.Count) * 3;
+        int removals = 0, maxRemovals = (bestSolution.Lanterns.Count + bestSolution.Obstacles.Count + bestSolution.Mirrors.Count);
+        State solution = CloneState(bestSolution);
 
         while (sw.Elapsed < maxTime)
         {
@@ -1443,13 +1605,13 @@ public class CrystalLighting
                     // Should we put lantern?
                     if (solution.LightMap[y, x] == Light.Empty)
                     {
-                        Light light = lightIntersections.LightMap[y, x];
+                        Light light = crystalLights.LightMap[y, x];
                         Light color = light & Light.ColorMask;
 
                         if (color == Light.Empty)
                             continue;
 
-                        Position position = new Position((sbyte)x, (sbyte)y);
+                        Position position = new Position(x, y);
 
                         // Try to put Blue lantern
                         if ((color & Light.Blue) == Light.Blue)
@@ -1492,7 +1654,7 @@ public class CrystalLighting
                     }
                     else
                     {
-                        Position position = new Position((sbyte)x, (sbyte)y);
+                        Position position = new Position(x, y);
 
                         // Try to put Obstacle
                         if (previousState.Obstacles.Count < maxObstacles)
@@ -1595,12 +1757,12 @@ public class CrystalLighting
             else if (bestMirrorScore >= bestLanternScore && bestMirrorScore >= bestObstacleScore && bestMirrorScore >= bestLanternRemovalScore && bestMirrorScore >= bestMirrorRemovalScore && bestMirrorScore >= bestObstacleRemovalScore)
             {
                 previousState.PutMirror(bestMirrorPosition, bestMirrorSlash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash, costMirror);
-                lightIntersections.PutMirror(bestMirrorPosition, bestMirrorSlash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash, costMirror);
+                crystalLights.PutMirror(bestMirrorPosition, bestMirrorSlash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash, costMirror);
             }
             else if (bestObstacleScore >= bestLanternScore && bestObstacleScore >= bestMirrorScore && bestObstacleScore >= bestLanternRemovalScore && bestObstacleScore >= bestMirrorRemovalScore && bestObstacleScore >= bestObstacleRemovalScore)
             {
                 previousState.PutObstacle(bestObstaclePosition, costObstacle);
-                lightIntersections.PutObstacle(bestObstaclePosition, costObstacle);
+                crystalLights.PutObstacle(bestObstaclePosition, costObstacle);
             }
             else if (bestLanternRemovalScore >= bestLanternScore && bestLanternRemovalScore >= bestObstacleScore && bestLanternRemovalScore >= bestMirrorScore && bestLanternRemovalScore >= bestObstacleRemovalScore && bestLanternRemovalScore >= bestMirrorRemovalScore)
             {
@@ -1610,13 +1772,13 @@ public class CrystalLighting
             else if (bestObstacleRemovalScore >= bestLanternScore && bestObstacleRemovalScore >= bestObstacleScore && bestObstacleRemovalScore >= bestMirrorScore && bestObstacleRemovalScore >= bestMirrorRemovalScore && bestObstacleRemovalScore >= bestLanternRemovalScore)
             {
                 previousState.RemoveObstacle(bestObstacleRemovalPosition, costObstacle, 0);
-                lightIntersections.RemoveObstacle(bestObstacleRemovalPosition, costObstacle, 0);
+                crystalLights.RemoveObstacle(bestObstacleRemovalPosition, costObstacle, 0);
                 removals++;
             }
             else if (bestMirrorRemovalScore >= bestLanternScore && bestMirrorRemovalScore >= bestObstacleScore && bestMirrorRemovalScore >= bestMirrorScore && bestMirrorRemovalScore >= bestLanternRemovalScore && bestMirrorRemovalScore >= bestObstacleRemovalScore)
             {
                 previousState.RemoveMirror(bestMirrorRemovalPosition, costObstacle, 0);
-                lightIntersections.RemoveMirror(bestMirrorRemovalPosition, costObstacle, 0);
+                crystalLights.RemoveMirror(bestMirrorRemovalPosition, costObstacle, 0);
                 removals++;
             }
 
