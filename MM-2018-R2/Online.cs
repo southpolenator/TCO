@@ -105,6 +105,14 @@ struct Obstacle
 {
     public Position Position;
 
+    public int Hash
+    {
+        get
+        {
+            return (Position.X << 17) ^ (Position.Y << 9);
+        }
+    }
+
     public override string ToString()
     {
         return Position.ToString();
@@ -116,6 +124,16 @@ struct Mirror
     public Position Position;
     public bool Slash;
 
+    public int Hash
+    {
+        get
+        {
+            BoardField mirrorType = Slash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash;
+
+            return (Position.X << 11) ^ (Position.Y << 3) ^ ((int)mirrorType << 20);
+        }
+    }
+
     public override string ToString()
     {
         return string.Format("{0}: {1}", Position, Slash ? '/' : '\\');
@@ -126,6 +144,14 @@ struct Lantern
 {
     public Position Position;
     public BoardField Color;
+
+    public int Hash
+    {
+        get
+        {
+            return ((int)Color << 16) ^ Position.X ^ (Position.Y << 8);
+        }
+    }
 
     public override string ToString()
     {
@@ -248,24 +274,18 @@ struct State
         hits[3] = AddColorDown(position.X, position.Y + 1, color);
         Score -= cost;
         PotentialScore -= cost;
-        BoardField fieldColor = BoardField.Empty;
-        if (color == Light.Red)
-            fieldColor = BoardField.Red;
-        else if (color == Light.Blue)
-            fieldColor = BoardField.Blue;
-        else if (color == Light.Yellow)
-            fieldColor = BoardField.Yellow;
-        Board[position.Y, position.X] |= BoardField.Lantern | fieldColor;
-        Lanterns.Add(new Lantern()
+        Board[position.Y, position.X] |= BoardField.Lantern | (BoardField)color;
+        Lantern lantern = new Lantern()
         {
-            Color = fieldColor,
+            Color = (BoardField)color,
             Position = position,
-        });
-        Hash = Hash ^ ((int)fieldColor << 16) ^ position.X ^ (position.Y << 8);
+        };
+        Lanterns.Add(lantern);
+        Hash = Hash ^ lantern.Hash;
         return true;
     }
 
-    public void RemoveLantern(Position position, int cost, int previousHash, Position[] hits = null)
+    public void RemoveLantern(Position position, int cost, Position[] hits = null)
     {
         hits = hits ?? dummyHits;
         hits[0] = ClearColorLeft(position.X - 1, position.Y);
@@ -275,17 +295,19 @@ struct State
         Score += cost;
         PotentialScore += cost;
         Board[position.Y, position.X] = BoardField.Empty;
+        int hash = 0;
         for (int i = Lanterns.Count - 1; i >= 0; i--)
         {
             Position lp = Lanterns[i].Position;
 
             if (lp.X == position.X && lp.Y == position.Y)
             {
+                hash = Lanterns[i].Hash;
                 Lanterns.RemoveAt(i);
                 break;
             }
         }
-        Hash = previousHash;
+        Hash = Hash ^ hash;
     }
 
     public void PutObstacle(Position position, int cost)
@@ -309,7 +331,7 @@ struct State
         Hash = Hash ^ (position.X << 17) ^ (position.Y << 9);
     }
 
-    public bool RemoveObstacle(Position position, int cost, int previousHash)
+    public bool RemoveObstacle(Position position, int cost)
     {
         Light lightDirection = LightMap[position.Y, position.X];
         bool hasLeft = (lightDirection & Light.LeftMask) != Light.Empty;
@@ -373,33 +395,26 @@ struct State
 
         Score += cost;
         PotentialScore += cost;
+        int hash = 0;
         for (int i = Obstacles.Count - 1; i >= 0; i--)
         {
             Position lp = Obstacles[i].Position;
 
             if (lp.X == position.X && lp.Y == position.Y)
             {
+                hash = Obstacles[i].Hash;
                 Obstacles.RemoveAt(i);
                 break;
             }
         }
         Board[position.Y, position.X] = BoardField.Empty;
-        Hash = previousHash;
+        Hash = Hash ^ hash;
         return true;
     }
 
-    public bool PutMirror(Position position, BoardField mirrorType, int cost)
-    {
-        int hitsCount;
-
-        return PutMirror(position, mirrorType, cost, dummyHits, out hitsCount);
-    }
-
-    public bool PutMirror(Position position, BoardField mirrorType, int cost, Position[] hits, out int hitsCount)
+    public bool IsPuttingMirrorSafe(Position position, BoardField mirrorType)
     {
         Light light = LightMap[position.Y, position.X];
-
-        hitsCount = 0;
 
         // Check if it will succeed
         Light up = light & Light.UpMask;
@@ -421,8 +436,38 @@ struct State
             if (right != Light.Empty && up != Light.Empty)
                 return false;
         }
+        return true;
+    }
+
+    public bool PutMirror(Position position, BoardField mirrorType, int cost)
+    {
+        int hitsCount;
+
+        return PutMirror(position, mirrorType, cost, dummyHits, out hitsCount);
+    }
+
+    public bool PutMirror(Position position, BoardField mirrorType, int cost, Position[] hits, out int hitsCount)
+    {
+        hitsCount = 0;
+        if (!IsPuttingMirrorSafe(position, mirrorType))
+            return false;
+        PutMirrorUnsafe(position, mirrorType, cost, hits, out hitsCount);
+        return true;
+    }
+
+    public void PutMirrorUnsafe(Position position, BoardField mirrorType, int cost)
+    {
+        int hitsCount;
+
+        PutMirrorUnsafe(position, mirrorType, cost, dummyHits, out hitsCount);
+    }
+
+    public void PutMirrorUnsafe(Position position, BoardField mirrorType, int cost, Position[] hits, out int hitsCount)
+    {
+        hitsCount = 0;
 
         // Correct light path
+        Light light = LightMap[position.Y, position.X];
         ClearColor(position, hits, ref hitsCount);
         if (mirrorType == BoardField.MirrorSlash)
         {
@@ -496,24 +541,24 @@ struct State
         }
         Score -= cost;
         PotentialScore -= cost;
-        Mirrors.Add(new Mirror()
+        Mirror mirror = new Mirror()
         {
             Position = position,
             Slash = mirrorType == BoardField.MirrorSlash,
-        });
+        };
+        Mirrors.Add(mirror);
         Board[position.Y, position.X] |= mirrorType;
-        Hash = Hash ^ (position.X << 11) ^ (position.Y << 3) ^ ((int)mirrorType << 20);
-        return true;
+        Hash = Hash ^ mirror.Hash;
     }
 
-    public bool RemoveMirror(Position position, int cost, int previousHash)
+    public bool RemoveMirror(Position position, int cost)
     {
         int hitsCount;
 
-        return RemoveMirror(position, cost, previousHash, dummyHits, out hitsCount);
+        return RemoveMirror(position, cost, dummyHits, out hitsCount);
     }
 
-    public bool RemoveMirror(Position position, int cost, int previousHash, Position[] hits, out int hitsCount)
+    public bool RemoveMirror(Position position, int cost, Position[] hits, out int hitsCount)
     {
         Light light = LightMap[position.Y, position.X];
         bool hasLeft = (light & Light.LeftMask) != Light.Empty;
@@ -583,18 +628,20 @@ struct State
         }
         Score += cost;
         PotentialScore += cost;
+        int hash = 0;
         for (int i = Mirrors.Count - 1; i >= 0; i--)
         {
             Position lp = Mirrors[i].Position;
 
             if (lp.X == position.X && lp.Y == position.Y)
             {
+                hash = Mirrors[i].Hash;
                 Mirrors.RemoveAt(i);
                 break;
             }
         }
         Board[position.Y, position.X] = BoardField.Empty;
-        Hash = previousHash;
+        Hash = Hash ^ hash;
         return true;
     }
 
@@ -1028,6 +1075,14 @@ struct State
         return newScore - previousScore;
     }
 
+    internal static int GetCrystalPotentialScoreDiff(Light previousColor, Light color, Light newColor)
+    {
+        int previousPotentialScore = GetCrystalPotentialScore(color, previousColor);
+        int newPotentialScore = GetCrystalPotentialScore(color, newColor);
+
+        return newPotentialScore - previousPotentialScore;
+    }
+
     private static int GetCrystalScore(Light crystalColor, Light lightColor)
     {
         if (lightColor == Light.Empty)
@@ -1060,12 +1115,19 @@ struct State
     }
 }
 
+struct ScoreTuple
+{
+    public int Score;
+    public int PotentialScore;
+}
+
 struct ExtendedState
 {
     public State State;
     public State CrystalLights;
     public State UnlitedCrystalLights;
-    private Position[] HitsCache;
+    internal Position[] HitsCache;
+    internal State InputState;
 
     public ExtendedState(State inputState)
         : this()
@@ -1073,6 +1135,7 @@ struct ExtendedState
         int width = inputState.Width;
         int height = inputState.Height;
 
+        InputState = CloneState(inputState);
         State = CloneState(inputState);
         CrystalLights = CloneState(inputState);
         for (int y = 0; y < height; y++)
@@ -1083,15 +1146,29 @@ struct ExtendedState
         HitsCache = new Position[12];
     }
 
-    public int GetLanternScore(Position position, Light light, int cost)
+    public ScoreTuple GetLanternScore(Position position, Light light, int cost)
     {
+        State.PutLantern(position, light, cost);
+        ScoreTuple originalScore = new ScoreTuple()
+        {
+            Score = State.Score,
+            PotentialScore = State.PotentialScore,
+        };
+        State.RemoveLantern(position, cost);
+
         Light crystalLights = CrystalLights.LightMap[position.Y, position.X];
         Light unlitedCrystalLights = UnlitedCrystalLights.LightMap[position.Y, position.X];
         Light leftCrystal = crystalLights.GetLeftColor();
         Light rightCrystal = crystalLights.GetRightColor();
         Light downCrystal = crystalLights.GetDownColor();
         Light upCrystal = crystalLights.GetUpColor();
-        int score = State.Score - cost;
+        ScoreTuple score = new ScoreTuple()
+        {
+            Score = State.Score,
+            PotentialScore = State.PotentialScore,
+        };
+        score.Score -= cost;
+        score.PotentialScore -= cost;
 
         if (leftCrystal != Light.Empty)
         {
@@ -1101,7 +1178,8 @@ struct ExtendedState
             Light color = crystal;
             Light newColor = previousColor | light;
 
-            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.Score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.PotentialScore += State.GetCrystalPotentialScoreDiff(previousColor, color, newColor);
         }
         if (rightCrystal != Light.Empty)
         {
@@ -1111,7 +1189,8 @@ struct ExtendedState
             Light color = crystal;
             Light newColor = previousColor | light;
 
-            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.Score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.PotentialScore += State.GetCrystalPotentialScoreDiff(previousColor, color, newColor);
         }
         if (downCrystal != Light.Empty)
         {
@@ -1121,7 +1200,8 @@ struct ExtendedState
             Light color = crystal;
             Light newColor = previousColor | light;
 
-            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.Score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.PotentialScore += State.GetCrystalPotentialScoreDiff(previousColor, color, newColor);
         }
         if (upCrystal != Light.Empty)
         {
@@ -1131,8 +1211,12 @@ struct ExtendedState
             Light color = crystal;
             Light newColor = previousColor | light;
 
-            score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.Score += State.GetCrystalScoreDiff(previousColor, color, newColor);
+            score.PotentialScore += State.GetCrystalPotentialScoreDiff(previousColor, color, newColor);
         }
+
+        if (score.Score != originalScore.Score || score.PotentialScore != originalScore.PotentialScore)
+            throw new Exception("ASDFASFDA");
 
         return score;
     }
@@ -1161,6 +1245,106 @@ struct ExtendedState
         return true;
     }
 
+    public ScoreTuple GetObstacleScore(Position position, int cost)
+    {
+        // TODO: Speed this up
+        ScoreTuple score = new ScoreTuple()
+        {
+            Score = State.Score,
+            PotentialScore = State.Score,
+        };
+        State.PutObstacle(position, cost);
+        score.Score = State.Score;
+        score.PotentialScore = State.PotentialScore;
+        State.RemoveObstacle(position, cost);
+        return score;
+    }
+
+    public void PutObstacle(Position position, int cost)
+    {
+        int hitsCount;
+        Position[] hits = HitsCache;
+
+        State.PutObstacle(position, cost, hits, out hitsCount);
+        CrystalLights.PutObstacle(position, cost);
+        UnlitedCrystalLights.PutObstacle(position, cost);
+        for (int i = 0; i < hitsCount; i++)
+        {
+            Position hit = hits[i];
+
+            if (hit.X < 0 && hit.Y < 0)
+            {
+                hit.X = -hit.X;
+                hit.Y = -hit.Y;
+            }
+            if (hit.X >= 0 && hit.Y >= 0 && hit.Y < State.Height && hit.X < State.Width)
+            {
+                BoardField field = State.Board[hit.Y, hit.X];
+
+                if ((field & BoardField.Crystal) == BoardField.Crystal)
+                {
+                    Light crystalColor = (Light)(State.Board[hit.Y, hit.X] & BoardField.ColorMask);
+                    Light crystalLight = State.LightMap[hit.Y, hit.X] & Light.ColorMask;
+
+                    UnlitedCrystalLights.UndoBacktraceCrystal(hit.X, hit.Y);
+                    UnlitedCrystalLights.BacktraceCrystal(hit.X, hit.Y, crystalColor ^ crystalLight);
+                }
+            }
+        }
+    }
+
+    public ScoreTuple GetMirrorScore(Position position, bool slash, int cost)
+    {
+        // TODO: Speed this up
+        ScoreTuple score = new ScoreTuple()
+        {
+            Score = State.Score,
+            PotentialScore = State.Score,
+        };
+        State.PutMirror(position, slash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash, cost);
+        score.Score = State.Score;
+        score.PotentialScore = State.PotentialScore;
+        State.RemoveMirror(position, cost);
+        return score;
+    }
+
+    public bool PutMirror(Position position, BoardField mirrorType, int cost)
+    {
+        int hitsCount;
+        Position[] hits = HitsCache;
+
+        if (!State.PutMirror(position, mirrorType, cost, hits, out hitsCount))
+            return false;
+        CrystalLights.PutMirrorUnsafe(position, mirrorType, cost);
+        UnlitedCrystalLights.PutMirrorUnsafe(position, mirrorType, cost);
+        for (int i = 0; i < hitsCount; i++)
+        {
+            Position hit = hits[i];
+
+            if (hit.X < 0 && hit.Y < 0)
+            {
+                hit.X = -hit.X;
+                hit.Y = -hit.Y;
+            }
+            if (hit.X >= 0 && hit.Y >= 0 && hit.Y < State.Height && hit.X < State.Width)
+            {
+                BoardField field = State.Board[hit.Y, hit.X];
+
+                if ((field & BoardField.Crystal) == BoardField.Crystal)
+                {
+                    Light crystalColor = (Light)(State.Board[hit.Y, hit.X] & BoardField.ColorMask);
+                    Light crystalLight = State.LightMap[hit.Y, hit.X] & Light.ColorMask;
+                    Light newColor = crystalColor ^ crystalLight;
+
+                    UnlitedCrystalLights.UndoBacktraceCrystal(hit.X, hit.Y);
+                    if (newColor != Light.Empty)
+                        UnlitedCrystalLights.BacktraceCrystal(hit.X, hit.Y, newColor);
+                }
+            }
+        }
+        return true;
+    }
+
     private static State CloneState(State inputState)
     {
         int height = inputState.Board.GetLength(0);
@@ -1176,7 +1360,7 @@ public class CrystalLighting
 {
     private Stopwatch sw;
 #if LOCAL
-    private TimeSpan maxTime = Debugger.IsAttached ? TimeSpan.FromSeconds(99999.5) : TimeSpan.FromSeconds(2.5);
+    private TimeSpan maxTime = Debugger.IsAttached ? TimeSpan.FromSeconds(99999.5) : TimeSpan.FromSeconds(200.5);
 #else
     private TimeSpan maxTime = TimeSpan.FromSeconds(9.5);
 #endif
@@ -1254,7 +1438,7 @@ public class CrystalLighting
         while (sw.Elapsed < maxTime && previousSolutionsCount > 0)
         {
 #if LOCAL
-            Console.Error.WriteLine("{0}. {1}   {2}s", steps, bestSolution.Score, sw.Elapsed.TotalSeconds);
+            Console.Error.WriteLine("{0}. {1}   {2}s   ({3} {4} {5})", steps, bestSolution.Score, sw.Elapsed.TotalSeconds, bestSolution.Lanterns.Count, bestSolution.Mirrors.Count, bestSolution.Obstacles.Count);
 #endif
             steps++;
             for (int pi = 0; pi < previousSolutionsCount; pi++)
@@ -1275,17 +1459,17 @@ public class CrystalLighting
                                 // Try to put Blue lantern
                                 solution.PutLantern(position, Light.Blue, costLantern);
                                 AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
-                                solution.RemoveLantern(position, costLantern, previousState.Hash);
+                                solution.RemoveLantern(position, costLantern);
 
                                 // Try to put Yellow lantern
                                 solution.PutLantern(position, Light.Yellow, costLantern);
                                 AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
-                                solution.RemoveLantern(position, costLantern, previousState.Hash);
+                                solution.RemoveLantern(position, costLantern);
 
                                 // Try to put Red lantern
                                 solution.PutLantern(position, Light.Red, costLantern);
                                 AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
-                                solution.RemoveLantern(position, costLantern, previousState.Hash);
+                                solution.RemoveLantern(position, costLantern);
                             }
                             else
                             {
@@ -1294,7 +1478,7 @@ public class CrystalLighting
                                 {
                                     solution.PutObstacle(position, costObstacle);
                                     AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
-                                    solution.RemoveObstacle(position, costObstacle, previousState.Hash);
+                                    solution.RemoveObstacle(position, costObstacle);
                                 }
 
                                 // Try to put slash Mirror /
@@ -1303,7 +1487,7 @@ public class CrystalLighting
                                     if (solution.PutMirror(position, BoardField.MirrorSlash, costMirror))
                                     {
                                         AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
-                                        solution.RemoveMirror(position, costMirror, previousState.Hash);
+                                        solution.RemoveMirror(position, costMirror);
                                     }
                                 }
 
@@ -1313,7 +1497,7 @@ public class CrystalLighting
                                     if (solution.PutMirror(position, BoardField.MirrorBackSlash, costMirror))
                                     {
                                         AddSolution(solutions, ref solutionsCount, solution, stateCache, ref stateCacheCount);
-                                        solution.RemoveMirror(position, costMirror, previousState.Hash);
+                                        solution.RemoveMirror(position, costMirror);
                                     }
                                 }
                             }
@@ -1344,10 +1528,353 @@ public class CrystalLighting
         return bestSolution;
     }
 
+    enum MoveType
+    {
+        Lantern,
+        Obstacle,
+        Mirror,
+    }
+
+    struct Move
+    {
+        public ExtendedState State; // TODO: Consider adding ref-counting
+        public MoveType Type;
+        public Lantern Lantern;
+        public Obstacle Obstacle;
+        public Mirror Mirror;
+        public int Score;
+        public int PotentialScore;
+        public int Hash;
+
+        public Move(ExtendedState state, Lantern lantern, int cost)
+            : this()
+        {
+            State = state;
+            Type = MoveType.Lantern;
+            Lantern = lantern;
+            Hash = state.State.Hash ^ lantern.Hash;
+            var score = state.GetLanternScore(lantern.Position, (Light)lantern.Color, cost);
+            Score = score.Score;
+            PotentialScore = score.PotentialScore;
+        }
+
+        public Move(ExtendedState state, Obstacle obstacle, int cost)
+            : this()
+        {
+            State = state;
+            Type = MoveType.Obstacle;
+            Obstacle = obstacle;
+            Hash = state.State.Hash ^ obstacle.Hash;
+            var score = state.GetObstacleScore(obstacle.Position, cost);
+            Score = score.Score;
+            PotentialScore = score.PotentialScore;
+        }
+
+        public Move(ExtendedState state, Mirror mirror, int cost)
+            : this()
+        {
+            State = state;
+            Type = MoveType.Mirror;
+            Mirror = mirror;
+            Hash = state.State.Hash ^ mirror.Hash;
+            var score = state.GetMirrorScore(mirror.Position, mirror.Slash, cost);
+            Score = score.Score;
+            PotentialScore = score.PotentialScore;
+        }
+
+        public ExtendedState Apply(int costLantern, int costObstacle, int costMirror)
+        {
+            ExtendedState result = new ExtendedState()
+            {
+                CrystalLights = CloneState(State.CrystalLights),
+                State = CloneState(State.State),
+                UnlitedCrystalLights = CloneState(State.UnlitedCrystalLights),
+                HitsCache = new Position[State.HitsCache.Length],
+                InputState = State.InputState,
+            };
+
+            switch (Type)
+            {
+                case MoveType.Lantern:
+                    result.PutLantern(Lantern.Position, (Light)Lantern.Color, costLantern);
+                    break;
+                case MoveType.Mirror:
+                    result.PutMirror(Mirror.Position, Mirror.Slash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash, costMirror);
+                    break;
+                case MoveType.Obstacle:
+                    result.PutObstacle(Obstacle.Position, costObstacle);
+                    break;
+                default:
+                    throw new NotImplementedException();
+            }
+            return result;
+        }
+
+        public bool Same(Move other)
+        {
+            // TODO: Implement Same for State, but it needs to include this action.
+            if (Hash != other.Hash)
+                return false;
+            if (Score != other.Score)
+                return false;
+            if (PotentialScore != other.PotentialScore)
+                return false;
+            int mirrorsCount = State.State.Mirrors.Count + (Type == MoveType.Mirror ? 1 : 0);
+            int otherMirrorsCount = other.State.State.Mirrors.Count + (other.Type == MoveType.Mirror ? 1 : 0);
+            if (mirrorsCount != otherMirrorsCount)
+                return false;
+            int obstaclesCount = State.State.Obstacles.Count + (Type == MoveType.Obstacle ? 1 : 0);
+            int otherObstaclesCount = other.State.State.Obstacles.Count + (other.Type == MoveType.Obstacle ? 1 : 0);
+            if (obstaclesCount != otherObstaclesCount)
+                return false;
+            int lanternsCount = State.State.Lanterns.Count + (Type == MoveType.Lantern ? 1 : 0);
+            int otherLanternsCount = other.State.State.Lanterns.Count + (other.Type == MoveType.Lantern ? 1 : 0);
+            if (lanternsCount != otherLanternsCount)
+                return false;
+            for (int i = 0; i < State.State.Obstacles.Count; i++)
+                if (other.State.State.Board[State.State.Obstacles[i].Position.Y, State.State.Obstacles[i].Position.X] != State.State.Board[State.State.Obstacles[i].Position.Y, State.State.Obstacles[i].Position.X])
+                {
+                    if (other.Type == MoveType.Obstacle)
+                    {
+                        var obstacle = State.State.Obstacles[i];
+                        var otherObstacle = other.Obstacle;
+
+                        if (obstacle.Position.X == otherObstacle.Position.X && obstacle.Position.Y == otherObstacle.Position.Y)
+                            continue;
+                    }
+                    return false;
+                }
+            if (Type == MoveType.Obstacle && other.State.State.Board[Obstacle.Position.Y, Obstacle.Position.X] != BoardField.Obstacle)
+                return false;
+            for (int i = 0; i < State.State.Mirrors.Count; i++)
+                if (other.State.State.Board[State.State.Mirrors[i].Position.Y, State.State.Mirrors[i].Position.X] != State.State.Board[State.State.Mirrors[i].Position.Y, State.State.Mirrors[i].Position.X])
+                {
+                    if (other.Type == MoveType.Mirror)
+                    {
+                        var mirror = State.State.Mirrors[i];
+                        var otherMirror = other.Mirror;
+
+                        if (mirror.Position.X == otherMirror.Position.X && mirror.Position.Y == otherMirror.Position.Y && mirror.Slash == otherMirror.Slash)
+                            continue;
+                    }
+                    return false;
+                }
+            if (Type == MoveType.Mirror && other.State.State.Board[Mirror.Position.Y, Mirror.Position.X] != (Mirror.Slash ? BoardField.MirrorSlash : BoardField.MirrorBackSlash))
+                return false;
+            for (int i = 0; i < State.State.Lanterns.Count; i++)
+                if (other.State.State.Board[State.State.Lanterns[i].Position.Y, State.State.Lanterns[i].Position.X] != State.State.Board[State.State.Lanterns[i].Position.Y, State.State.Lanterns[i].Position.X])
+                {
+                    if (other.Type == MoveType.Lantern)
+                    {
+                        var lantern = State.State.Lanterns[i];
+                        var otherLantern = other.Lantern;
+
+                        if (lantern.Position.X == otherLantern.Position.X && lantern.Position.Y == otherLantern.Position.Y && lantern.Color == otherLantern.Color)
+                            continue;
+                    }
+                    return false;
+                }
+            if (Type == MoveType.Lantern && other.State.State.Board[Lantern.Position.Y, Lantern.Position.X] != (BoardField.Lantern | Lantern.Color))
+                return false;
+            return true;
+        }
+    }
+
+    private State Solve2(State inputState, int costLantern, int costMirror, int costObstacle, int maxMirrors, int maxObstacles)
+    {
+        Move[] moves = new Move[maxRayWidth];
+        int movesCount = 0;
+        ExtendedState[] previousStates = new ExtendedState[maxRayWidth];
+        int previousStatesCount = 0;
+        State bestSolution = CloneState(inputState);
+        int height = inputState.Height;
+        int width = inputState.Width;
+        Position position = new Position();
+        int steps = 0;
+
+        previousStates[previousStatesCount++] = new ExtendedState(inputState);
+        while (sw.Elapsed < maxTime && previousStatesCount > 0)
+        {
+#if LOCAL
+            Console.Error.WriteLine("{0}. {1}   {2}s   ({3} {4} {5})", steps, bestSolution.Score, sw.Elapsed.TotalSeconds, bestSolution.Lanterns.Count, bestSolution.Mirrors.Count, bestSolution.Obstacles.Count);
+#endif
+            steps++;
+            for (int pi = 0; pi < previousStatesCount; pi++)
+            {
+                ExtendedState previousState = previousStates[pi];
+
+                if (sw.Elapsed > maxTime)
+                    break;
+                for (position.Y = 0; position.Y < height; position.Y++)
+                {
+                    if (sw.Elapsed > maxTime)
+                        break;
+                    for (position.X = 0; position.X < width; position.X++)
+                        if (!previousState.State.HasObject(position))
+                        {
+                            if (!previousState.State.HasColor(position))
+                            {
+                                Light light = previousState.CrystalLights.LightMap[position.Y, position.X];
+                                Light color = light & Light.ColorMask;
+
+                                if (color == Light.Empty)
+                                    continue;
+
+                                // Try to put Blue lantern
+                                if ((color & Light.Blue) == Light.Blue)
+                                {
+                                    Move move = new Move(previousState, new Lantern() { Position = position, Color = BoardField.Blue }, costLantern);
+
+                                    AddSolution(moves, ref movesCount, move);
+                                }
+
+                                // Try to put Yellow lantern
+                                if ((color & Light.Yellow) == Light.Yellow)
+                                {
+                                    Move move = new Move(previousState, new Lantern() { Position = position, Color = BoardField.Yellow }, costLantern);
+
+                                    AddSolution(moves, ref movesCount, move);
+                                }
+
+                                // Try to put Red lantern
+                                if ((color & Light.Red) == Light.Red)
+                                {
+                                    Move move = new Move(previousState, new Lantern() { Position = position, Color = BoardField.Red }, costLantern);
+
+                                    AddSolution(moves, ref movesCount, move);
+                                }
+                            }
+                            else
+                            {
+                                // Try to put Obstacle
+                                if (previousState.State.Obstacles.Count < maxObstacles)
+                                {
+                                    Move move = new Move(previousState, new Obstacle() { Position = position }, costObstacle);
+
+                                    AddSolution(moves, ref movesCount, move);
+                                }
+
+                                // Try to put slash Mirror /
+                                if (previousState.State.Mirrors.Count < maxMirrors)
+                                {
+                                    if (previousState.State.IsPuttingMirrorSafe(position, BoardField.MirrorSlash))
+                                    {
+                                        Move move = new Move(previousState, new Mirror() { Position = position, Slash = true }, costObstacle);
+
+                                        AddSolution(moves, ref movesCount, move);
+                                    }
+                                }
+
+                                // Try to put backslash Mirror \
+                                if (previousState.State.Mirrors.Count < maxMirrors)
+                                {
+                                    if (previousState.State.IsPuttingMirrorSafe(position, BoardField.MirrorBackSlash))
+                                    {
+                                        Move move = new Move(previousState, new Mirror() { Position = position, Slash = false }, costObstacle);
+
+                                        AddSolution(moves, ref movesCount, move);
+                                    }
+                                }
+                            }
+                        }
+                }
+            }
+
+            // Convert moves to previous states
+            for (int i = 0; i < movesCount; i++)
+                previousStates[i] = moves[i].Apply(costLantern, costObstacle, costMirror);
+            previousStatesCount = movesCount;
+            movesCount = 0;
+
+            // Store best solution
+            for (int i = 0; i < previousStatesCount; i++)
+                if (previousStates[i].State.Score > bestSolution.Score)
+                    bestSolution.Copy(previousStates[i].State);
+        }
+#if LOCAL
+        Console.Error.WriteLine("{0}: {1} ({2}s)", steps, bestSolution.Score, sw.Elapsed.TotalSeconds);
+#endif
+        return bestSolution;
+    }
+
+    private class MoveCostComparerClass : IComparer<Move>
+    {
+        public int Compare(Move x, Move y)
+        {
+            return y.Score - x.Score;
+        }
+    }
+
+    static MoveCostComparerClass MoveCostComparer = new MoveCostComparerClass();
+
+    private class MovePotentialCostComparerClass : IComparer<Move>
+    {
+        public int Compare(Move x, Move y)
+        {
+            return y.PotentialScore - x.PotentialScore;
+        }
+    }
+
+    static MovePotentialCostComparerClass MovePotentialCostComparer = new MovePotentialCostComparerClass();
+
+    private void AddSolution(Move[] moves, ref int movesCount, Move move)
+    {
+        if (movesCount < moves.Length)
+        {
+            if (movesCount > 0)
+            {
+                int index = Array.BinarySearch(moves, 0, movesCount, move, MovePotentialCostComparer);
+
+                if (index < 0)
+                {
+                    index = ~index;
+                }
+                else
+                {
+                    while (index + 1 < movesCount && moves[index].PotentialScore == moves[index + 1].PotentialScore)
+                        index++;
+                    for (int i = index; i >= 0 && moves[i].PotentialScore == move.PotentialScore; i--)
+                        if (moves[i].Hash == move.Hash && moves[i].Same(move))
+                            return;
+                    index++;
+                }
+                if (index != movesCount)
+                    Array.Copy(moves, index, moves, index + 1, movesCount - index);
+                moves[index] = move;
+                movesCount++;
+            }
+            else
+                moves[movesCount++] = move;
+        }
+        else
+        {
+            if (moves[moves.Length - 1].PotentialScore >= move.PotentialScore)
+                return;
+
+            int index = Array.BinarySearch(moves, 0, movesCount, move, MovePotentialCostComparer);
+
+            if (index < 0)
+                index = ~index;
+            else
+            {
+                while (index + 1 < movesCount && moves[index].PotentialScore == moves[index + 1].PotentialScore)
+                    index++;
+                for (int i = index; i >= 0 && moves[i].PotentialScore == move.PotentialScore; i--)
+                    if (moves[i].Hash == move.Hash && moves[i].Same(move))
+                        return;
+                if (index < movesCount + 1)
+                    index++;
+            }
+            if (index != moves.Length - 1)
+                Array.Copy(moves, index, moves, index + 1, moves.Length - 1 - index);
+            moves[index] = move;
+        }
+    }
+
     private State SolveGreedy(State inputState, int costLantern, int costMirror, int costObstacle, int maxMirrors, int maxObstacles)
     {
         State bestSolution = CloneState(inputState);
-        State crystalLights = CloneState(inputState); // TODO: Remove
+        State crystalLights = CloneState(inputState); // TODO: Remove once ExtendedState implements everything needed for this function.
         int width = inputState.Width;
         int height = inputState.Height;
         ExtendedState extendedState = new ExtendedState(inputState);
@@ -1420,7 +1947,7 @@ public class CrystalLighting
                 {
                     if (yellowDirection == Light.Empty || redDirection == Light.Empty)
                     {
-                        int score = extendedState.GetLanternScore(position, Light.Blue, costLantern);
+                        int score = extendedState.GetLanternScore(position, Light.Blue, costLantern).Score;
                         if (score > bestSolution.Score)
                         {
                             bestSolution.PutLantern(position, Light.Blue, costLantern);
@@ -1432,7 +1959,7 @@ public class CrystalLighting
                 {
                     if (blueDirection == Light.Empty || redDirection == Light.Empty)
                     {
-                        int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern);
+                        int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern).Score;
                         if (score > bestSolution.Score)
                         {
                             bestSolution.PutLantern(position, Light.Yellow, costLantern);
@@ -1444,7 +1971,7 @@ public class CrystalLighting
                 {
                     if (blueDirection == Light.Empty || yellowDirection == Light.Empty)
                     {
-                        int score = extendedState.GetLanternScore(position, Light.Red, costLantern);
+                        int score = extendedState.GetLanternScore(position, Light.Red, costLantern).Score;
                         if (score > bestSolution.Score)
                         {
                             bestSolution.PutLantern(position, Light.Red, costLantern);
@@ -1475,7 +2002,7 @@ public class CrystalLighting
 
                 if (blueMultiple)
                 {
-                    int score = extendedState.GetLanternScore(position, Light.Blue, costLantern);
+                    int score = extendedState.GetLanternScore(position, Light.Blue, costLantern).Score;
                     if (score > bestSolution.Score)
                     {
                         bestSolution.PutLantern(position, Light.Blue, costLantern);
@@ -1485,7 +2012,7 @@ public class CrystalLighting
                 }
                 if (yellowMultiple)
                 {
-                    int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern);
+                    int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern).Score;
                     if (score > bestSolution.Score)
                     {
                         bestSolution.PutLantern(position, Light.Yellow, costLantern);
@@ -1495,7 +2022,7 @@ public class CrystalLighting
                 }
                 if (redMultiple)
                 {
-                    int score = extendedState.GetLanternScore(position, Light.Red, costLantern);
+                    int score = extendedState.GetLanternScore(position, Light.Red, costLantern).Score;
                     if (score > bestSolution.Score)
                     {
                         bestSolution.PutLantern(position, Light.Red, costLantern);
@@ -1533,7 +2060,7 @@ public class CrystalLighting
                     // Try to put Blue lantern
                     if ((color & Light.Blue) == Light.Blue)
                     {
-                        int score = extendedState.GetLanternScore(position, Light.Blue, costLantern);
+                        int score = extendedState.GetLanternScore(position, Light.Blue, costLantern).Score;
                         if (score > bestScore)
                         {
                             bestScore = score;
@@ -1545,7 +2072,7 @@ public class CrystalLighting
                     // Try to put Yellow lantern
                     if ((color & Light.Yellow) == Light.Yellow)
                     {
-                        int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern);
+                        int score = extendedState.GetLanternScore(position, Light.Yellow, costLantern).Score;
                         if (score > bestScore)
                         {
                             bestScore = score;
@@ -1557,7 +2084,7 @@ public class CrystalLighting
                     // Try to put Red lantern
                     if ((color & Light.Red) == Light.Red)
                     {
-                        int score = extendedState.GetLanternScore(position, Light.Red, costLantern);
+                        int score = extendedState.GetLanternScore(position, Light.Red, costLantern).Score;
                         if (score > bestScore)
                         {
                             bestScore = score;
@@ -1623,7 +2150,7 @@ public class CrystalLighting
                                     bestLanternColor = Light.Blue;
                                     bestLanternPosition = position;
                                 }
-                            solution.RemoveLantern(position, costLantern, previousState.Hash);
+                            solution.RemoveLantern(position, costLantern);
                         }
 
                         // Try to put Yellow lantern
@@ -1636,7 +2163,7 @@ public class CrystalLighting
                                     bestLanternColor = Light.Yellow;
                                     bestLanternPosition = position;
                                 }
-                            solution.RemoveLantern(position, costLantern, previousState.Hash);
+                            solution.RemoveLantern(position, costLantern);
                         }
 
                         // Try to put Red lantern
@@ -1649,7 +2176,7 @@ public class CrystalLighting
                                     bestLanternColor = Light.Red;
                                     bestLanternPosition = position;
                                 }
-                            solution.RemoveLantern(position, costLantern, previousState.Hash);
+                            solution.RemoveLantern(position, costLantern);
                         }
                     }
                     else
@@ -1665,7 +2192,7 @@ public class CrystalLighting
                                 bestObstacleScore = solution.Score;
                                 bestObstaclePosition = position;
                             }
-                            solution.RemoveObstacle(position, costObstacle, previousState.Hash);
+                            solution.RemoveObstacle(position, costObstacle);
                         }
 
                         // Try to put slash Mirror /
@@ -1679,7 +2206,7 @@ public class CrystalLighting
                                     bestMirrorPosition = position;
                                     bestMirrorSlash = true;
                                 }
-                                solution.RemoveMirror(position, costMirror, previousState.Hash);
+                                solution.RemoveMirror(position, costMirror);
                             }
                         }
 
@@ -1694,7 +2221,7 @@ public class CrystalLighting
                                     bestMirrorPosition = position;
                                     bestMirrorSlash = false;
                                 }
-                                solution.RemoveMirror(position, costMirror, previousState.Hash);
+                                solution.RemoveMirror(position, costMirror);
                             }
                         }
                     }
@@ -1712,7 +2239,7 @@ public class CrystalLighting
             {
                 for (int i = 0; i < previousState.Lanterns.Count; i++)
                 {
-                    solution.RemoveLantern(previousState.Lanterns[i].Position, costLantern, 0);
+                    solution.RemoveLantern(previousState.Lanterns[i].Position, costLantern);
                     if (solution.Score > bestLanternRemovalScore)
                     {
                         bestLanternRemovalPosition = previousState.Lanterns[i].Position;
@@ -1723,7 +2250,7 @@ public class CrystalLighting
 
                 for (int i = 0; i < previousState.Obstacles.Count; i++)
                 {
-                    if (!solution.RemoveObstacle(previousState.Obstacles[i].Position, costObstacle, 0))
+                    if (!solution.RemoveObstacle(previousState.Obstacles[i].Position, costObstacle))
                     {
                         if (solution.Score > bestObstacleRemovalScore)
                         {
@@ -1736,7 +2263,7 @@ public class CrystalLighting
 
                 for (int i = 0; i < previousState.Mirrors.Count; i++)
                 {
-                    if (!solution.RemoveMirror(previousState.Mirrors[i].Position, costMirror, 0))
+                    if (!solution.RemoveMirror(previousState.Mirrors[i].Position, costMirror))
                     {
                         if (solution.Score > bestMirrorRemovalScore)
                         {
@@ -1766,19 +2293,19 @@ public class CrystalLighting
             }
             else if (bestLanternRemovalScore >= bestLanternScore && bestLanternRemovalScore >= bestObstacleScore && bestLanternRemovalScore >= bestMirrorScore && bestLanternRemovalScore >= bestObstacleRemovalScore && bestLanternRemovalScore >= bestMirrorRemovalScore)
             {
-                previousState.RemoveLantern(bestLanternRemovalPosition, costLantern, 0);
+                previousState.RemoveLantern(bestLanternRemovalPosition, costLantern);
                 removals++;
             }
             else if (bestObstacleRemovalScore >= bestLanternScore && bestObstacleRemovalScore >= bestObstacleScore && bestObstacleRemovalScore >= bestMirrorScore && bestObstacleRemovalScore >= bestMirrorRemovalScore && bestObstacleRemovalScore >= bestLanternRemovalScore)
             {
-                previousState.RemoveObstacle(bestObstacleRemovalPosition, costObstacle, 0);
-                crystalLights.RemoveObstacle(bestObstacleRemovalPosition, costObstacle, 0);
+                previousState.RemoveObstacle(bestObstacleRemovalPosition, costObstacle);
+                crystalLights.RemoveObstacle(bestObstacleRemovalPosition, costObstacle);
                 removals++;
             }
             else if (bestMirrorRemovalScore >= bestLanternScore && bestMirrorRemovalScore >= bestObstacleScore && bestMirrorRemovalScore >= bestMirrorScore && bestMirrorRemovalScore >= bestLanternRemovalScore && bestMirrorRemovalScore >= bestObstacleRemovalScore)
             {
-                previousState.RemoveMirror(bestMirrorRemovalPosition, costObstacle, 0);
-                crystalLights.RemoveMirror(bestMirrorRemovalPosition, costObstacle, 0);
+                previousState.RemoveMirror(bestMirrorRemovalPosition, costObstacle);
+                crystalLights.RemoveMirror(bestMirrorRemovalPosition, costObstacle);
                 removals++;
             }
 
