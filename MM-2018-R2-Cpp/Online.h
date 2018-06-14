@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <queue>
+#include <memory>
 
 using namespace std;
 
@@ -222,42 +223,163 @@ struct PrecalculatedMoves
 
 struct State
 {
-    vector<BoardField> board;
-    vector<Light> lightMap;
-    vector<Light> crystalsLightMap;
-    vector<int16> crystalsFromLeft;
-    vector<int16> crystalsFromRight;
-    vector<int16> crystalsFromUp;
-    vector<int16> crystalsFromDown;
-    vector<Lantern> lanterns;
-    vector<Obstacle> obstacles;
-    vector<Mirror> mirrors;
-    vector<PrecalculatedMoves> precalculatedMoves;
+    BoardField* board;
+    Light* lightMap;
+    Light* crystalsLightMap;
+    int16* crystalsFromLeft;
+    int16* crystalsFromRight;
+    int16* crystalsFromUp;
+    int16* crystalsFromDown;
+    PrecalculatedMoves* precalculatedMoves;
     int8 width;
     int8 height;
     int score;
     int potentialScore;
     int hash;
+    vector<Lantern> lanterns;
+    vector<Obstacle> obstacles;
+    vector<Mirror> mirrors;
+    char* memoryBuffer;
+
+    static int MemoryBufferSize(int8 width, int8 height)
+    {
+        return MemoryBufferSize(width * height);
+    }
+    static int MemoryBufferSize(int16 elements)
+    {
+        int size = sizeof(board[0]) * elements
+            + sizeof(lightMap[0]) * elements
+            + sizeof(crystalsLightMap[0]) * elements
+            + sizeof(crystalsFromLeft[0]) * elements
+            + sizeof(crystalsFromRight[0]) * elements
+            + sizeof(crystalsFromUp[0]) * elements
+            + sizeof(crystalsFromDown[0]) * elements
+            + sizeof(precalculatedMoves[0]) * elements;
+        return size;
+    }
+
+    static vector<char*>& GetMemoryBufferPool(int16 elements)
+    {
+        static vector<char*> memoryBufferPools[100 * 100];
+
+        return memoryBufferPools[elements - 1];
+    }
+
+    static void ReturnMemoryBuffer(char* memoryBuffer, int16 elements)
+    {
+        GetMemoryBufferPool(elements).push_back(memoryBuffer);
+    }
+
+    static char* GetMemoryBuffer(int16 elements)
+    {
+        vector<char*>& memoryBufferPool = GetMemoryBufferPool(elements);
+        char* memoryBuffer;
+
+        if (memoryBufferPool.empty())
+            memoryBuffer = new char[MemoryBufferSize(elements)];
+        else
+        {
+            memoryBuffer = memoryBufferPool.back();
+            memoryBufferPool.pop_back();
+        }
+        return memoryBuffer;
+    }
+
+    State()
+        : memoryBuffer(nullptr)
+    {
+    }
 
     State(int8 width, int8 height)
         : width(width)
         , height(height)
-        , board(width * height, BoardField::Empty)
-        , lightMap(width * height, Light::Empty)
-        , crystalsLightMap(width * height, Light::Empty)
-        , crystalsFromLeft(width * height, -1)
-        , crystalsFromRight(width * height, -1)
-        , crystalsFromUp(width * height, -1)
-        , crystalsFromDown(width * height, -1)
         , score(0)
         , potentialScore(0)
         , hash(0)
-        , precalculatedMoves(width * height)
     {
+        CreateBuffers(true);
     }
 
-    State(const State& state) = default;
-    State& operator=(const State& state) = default;
+    State(const State& state)
+        : width(state.width)
+        , height(state.height)
+        , score(state.score)
+        , potentialScore(state.potentialScore)
+        , hash(state.hash)
+        , lanterns(state.lanterns)
+        , obstacles(state.obstacles)
+        , mirrors(state.mirrors)
+    {
+        CreateBuffers(false);
+        memcpy(memoryBuffer, state.memoryBuffer, MemoryBufferSize(width, height));
+    }
+
+    ~State()
+    {
+        if (memoryBuffer != nullptr)
+            ReturnMemoryBuffer(memoryBuffer, width * height);
+    }
+
+    State& operator=(const State& state)
+    {
+        if (width != state.width || height != state.height)
+            CreateBuffers(false);
+        width = state.width;
+        height = state.height;
+        score = state.score;
+        potentialScore = state.potentialScore;
+        hash = state.hash;
+        lanterns = state.lanterns;
+        obstacles = state.obstacles;
+        mirrors = state.mirrors;
+        memcpy(memoryBuffer, state.memoryBuffer, MemoryBufferSize(width, height));
+        return *this;
+    }
+
+    void CreateBuffers(bool initialize)
+    {
+        int16 elements = width * height;
+        int offset = 0;
+
+        boardSize = elements;
+        memoryBuffer = GetMemoryBuffer(elements);
+
+        board = (BoardField*)(memoryBuffer + offset);
+        offset += sizeof(board[0]) * elements;
+
+        lightMap = (Light*)(memoryBuffer + offset);
+        offset += sizeof(lightMap[0]) * elements;
+
+        crystalsLightMap = (Light*)(memoryBuffer + offset);
+        offset += sizeof(crystalsLightMap[0]) * elements;
+
+        crystalsFromLeft = (int16*)(memoryBuffer + offset);
+        offset += sizeof(crystalsFromLeft[0]) * elements;
+
+        crystalsFromRight = (int16*)(memoryBuffer + offset);
+        offset += sizeof(crystalsFromRight[0]) * elements;
+
+        crystalsFromUp = (int16*)(memoryBuffer + offset);
+        offset += sizeof(crystalsFromUp[0]) * elements;
+
+        crystalsFromDown = (int16*)(memoryBuffer + offset);
+        offset += sizeof(crystalsFromDown[0]) * elements;
+
+        precalculatedMoves = (PrecalculatedMoves*)(memoryBuffer + offset);
+        offset += sizeof(precalculatedMoves[0]) * elements;
+
+        if (initialize)
+        {
+            memset(board, (int)BoardField::Empty, sizeof(board[0]) * elements);
+            memset(lightMap, (int)Light::Empty, sizeof(lightMap[0]) * elements);
+            memset(crystalsLightMap, (int)Light::Empty, sizeof(crystalsLightMap[0]) * elements);
+            memset(crystalsFromLeft, -1, sizeof(crystalsFromLeft[0]) * elements);
+            memset(crystalsFromRight, -1, sizeof(crystalsFromRight[0]) * elements);
+            memset(crystalsFromUp, -1, sizeof(crystalsFromUp[0]) * elements);
+            memset(crystalsFromDown, -1, sizeof(crystalsFromDown[0]) * elements);
+            memset(precalculatedMoves, -1, sizeof(precalculatedMoves[0]) * elements);
+        }
+    }
 
     State(State&& state)
         : board(std::move(state.board))
@@ -276,7 +398,9 @@ struct State
         , score(state.score)
         , potentialScore(state.potentialScore)
         , hash(state.hash)
+        , memoryBuffer(state.memoryBuffer)
     {
+        state.memoryBuffer = nullptr;
     }
 
     void UpdateFromBoard()
@@ -319,8 +443,8 @@ struct State
         UpdateMoves(costLantern, costMirror, costObstacle, maxMirrors, maxObstacles);
 
         // Take first maxMoves
-        PrecalculatedMoves* preMoves = precalculatedMoves.data();
-        int16 mp = 0, mpMax = (int16)precalculatedMoves.size();
+        PrecalculatedMoves* preMoves = precalculatedMoves;
+        int16 mp = 0, mpMax = width * height;
         bool obstaclesOk = (int)obstacles.size() < maxObstacles;
         bool mirrorsOk = (int)mirrors.size() < maxMirrors;
 
@@ -1041,7 +1165,9 @@ private:
         potentialScore += hit.GetPotentialScore();
     }
 
-    static void UpdateMapLeft(int8 x, int8 y, int16 mp, int8 stride, int16 value, vector<int16>& leftMps, vector<int16>& rightMps, vector<int16>& upMps, vector<int16>& downMps, vector<BoardField>& board)
+    static int16 boardSize;
+
+    static void UpdateMapLeft(int8 x, int8 y, int16 mp, int8 stride, int16 value, int16* leftMps, int16* rightMps, int16* upMps, int16* downMps, BoardField* board)
     {
         while (x >= 0)
         {
@@ -1063,7 +1189,7 @@ private:
         }
     }
 
-    static void UpdateMapRight(int8 x, int8 y, int16 mp, int8 stride, int16 value, vector<int16>& leftMps, vector<int16>& rightMps, vector<int16>& upMps, vector<int16>& downMps, vector<BoardField>& board)
+    static void UpdateMapRight(int8 x, int8 y, int16 mp, int8 stride, int16 value, int16* leftMps, int16* rightMps, int16* upMps, int16* downMps, BoardField* board)
     {
         while (x < stride)
         {
@@ -1085,7 +1211,7 @@ private:
         }
     }
 
-    static void UpdateMapUp(int8 x, int8 y, int16 mp, int8 stride, int16 value, vector<int16>& leftMps, vector<int16>& rightMps, vector<int16>& upMps, vector<int16>& downMps, vector<BoardField>& board)
+    static void UpdateMapUp(int8 x, int8 y, int16 mp, int8 stride, int16 value, int16* leftMps, int16* rightMps, int16* upMps, int16* downMps, BoardField* board)
     {
         while (y >= 0)
         {
@@ -1107,9 +1233,9 @@ private:
         }
     }
 
-    static void UpdateMapDown(int8 x, int8 y, int16 mp, int8 stride, int16 value, vector<int16>& leftMps, vector<int16>& rightMps, vector<int16>& upMps, vector<int16>& downMps, vector<BoardField>& board)
+    static void UpdateMapDown(int8 x, int8 y, int16 mp, int8 stride, int16 value, int16* leftMps, int16* rightMps, int16* upMps, int16* downMps, BoardField* board)
     {
-        int16 mpMax = (int16)board.size();
+        int16 mpMax = boardSize;
 
         while (mp < mpMax)
         {
@@ -1131,7 +1257,7 @@ private:
         }
     }
 
-    static Hit AddColorLeft(int8 x, int8 y, int16 mp, int8 stride, Color color, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit AddColorLeft(int8 x, int8 y, int16 mp, int8 stride, Color color, Light* lightMap, BoardField* board)
     {
         Light direction = Light::Empty;
 
@@ -1169,7 +1295,7 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit AddColorRight(int8 x, int8 y, int16 mp, int8 stride, Color color, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit AddColorRight(int8 x, int8 y, int16 mp, int8 stride, Color color, Light* lightMap, BoardField* board)
     {
         Light direction = Light::Empty;
 
@@ -1207,7 +1333,7 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit AddColorUp(int8 x, int8 y, int16 mp, int8 stride, Color color, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit AddColorUp(int8 x, int8 y, int16 mp, int8 stride, Color color, Light* lightMap, BoardField* board)
     {
         Light direction = Light::Empty;
 
@@ -1245,9 +1371,9 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit AddColorDown(int8 x, int8 y, int16 mp, int8 stride, Color color, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit AddColorDown(int8 x, int8 y, int16 mp, int8 stride, Color color, Light* lightMap, BoardField* board)
     {
-        int16 mpMax = (int16)board.size();
+        int16 mpMax = boardSize;
         Light direction = Light::Empty;
 
         if ((color & Color::Blue) == Color::Blue)
@@ -1284,7 +1410,7 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit ClearColorLeft(int8 x, int8 y, int16 mp, int8 stride, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit ClearColorLeft(int8 x, int8 y, int16 mp, int8 stride, Light* lightMap, BoardField* board)
     {
         while (x >= 0)
         {
@@ -1326,7 +1452,7 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit ClearColorRight(int8 x, int8 y, int16 mp, int8 stride, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit ClearColorRight(int8 x, int8 y, int16 mp, int8 stride, Light* lightMap, BoardField* board)
     {
         while (x < stride)
         {
@@ -1368,7 +1494,7 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit ClearColorUp(int8 x, int8 y, int16 mp, int8 stride, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit ClearColorUp(int8 x, int8 y, int16 mp, int8 stride, Light* lightMap, BoardField* board)
     {
         while (y >= 0)
         {
@@ -1410,9 +1536,9 @@ private:
         return Hit(x, y, mp);
     }
 
-    static Hit ClearColorDown(int8 x, int8 y, int16 mp, int8 stride, vector<Light>& lightMap, vector<BoardField>& board)
+    static Hit ClearColorDown(int8 x, int8 y, int16 mp, int8 stride, Light* lightMap, BoardField* board)
     {
-        int16 mpMax = (int16)board.size();
+        int16 mpMax = boardSize;
 
         while (mp < mpMax)
         {
@@ -1454,7 +1580,7 @@ private:
         return Hit(x, y, mp);
     }
 
-    static void InvalidatePreMovesLeft(int8 x, int8 y, int16 mp, int8 stride, vector<PrecalculatedMoves>& moves, vector<BoardField>& board, bool invalidateCrystals = true)
+    static void InvalidatePreMovesLeft(int8 x, int8 y, int16 mp, int8 stride, PrecalculatedMoves* moves, BoardField* board, bool invalidateCrystals = true)
     {
         while (x >= 0)
         {
@@ -1483,7 +1609,7 @@ private:
         }
     }
 
-    static void InvalidatePreMovesRight(int8 x, int8 y, int16 mp, int8 stride, vector<PrecalculatedMoves>& moves, vector<BoardField>& board, bool invalidateCrystals = true)
+    static void InvalidatePreMovesRight(int8 x, int8 y, int16 mp, int8 stride, PrecalculatedMoves* moves, BoardField* board, bool invalidateCrystals = true)
     {
         while (x < stride)
         {
@@ -1512,7 +1638,7 @@ private:
         }
     }
 
-    static void InvalidatePreMovesUp(int8 x, int8 y, int16 mp, int8 stride, vector<PrecalculatedMoves>& moves, vector<BoardField>& board, bool invalidateCrystals = true)
+    static void InvalidatePreMovesUp(int8 x, int8 y, int16 mp, int8 stride, PrecalculatedMoves* moves, BoardField* board, bool invalidateCrystals = true)
     {
         while (y >= 0)
         {
@@ -1541,9 +1667,9 @@ private:
         }
     }
 
-    static void InvalidatePreMovesDown(int8 x, int8 y, int16 mp, int8 stride, vector<PrecalculatedMoves>& moves, vector<BoardField>& board, bool invalidateCrystals = true)
+    static void InvalidatePreMovesDown(int8 x, int8 y, int16 mp, int8 stride, PrecalculatedMoves* moves, BoardField* board, bool invalidateCrystals = true)
     {
-        int16 mpMax = (int16)board.size();
+        int16 mpMax = boardSize;
 
         while (mp < mpMax)
         {
@@ -1624,6 +1750,8 @@ private:
         return color;
     }
 };
+
+int16 State::boardSize = -1;
 
 Move::Move(State* state, Lantern lantern, int cost)
     : state(state)
@@ -1947,7 +2075,8 @@ private:
             // Convert moves to states
             for (auto& move : moves)
             {
-                int& refCount = refCounts[move.state - previousStates.data()];
+                int index = move.state - previousStates.data();
+                int& refCount = refCounts[index];
                 bool reuse = refCount == 1;
 
                 if (reuse)
@@ -1971,9 +2100,7 @@ private:
             moves.clear();
         }
 
-#if LOCAL
         cerr << steps << ". " << bestSolution.score << " " << ElapsedSeconds() << "s " << bestSolution.lanterns.size() << " " << bestSolution.mirrors.size() << " " << bestSolution.obstacles.size() << endl;
-#endif
         return bestSolution;
     }
 
